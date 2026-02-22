@@ -6,3 +6,25 @@ dataset_final/
 *.wav
 *.mp3
 .DS_Store
+
+# ASTRA Datos pesados
+minutes/
+minutes-txt/
+cache_test/
+_reports/
+reports_jobs/
+transcriptions/
+_storage/
+dataset_final/
+*.docx
+*.mp3
+*.wav
+*.jsonl
+*.csv
+
+# Python / Node / SO
+venv/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
