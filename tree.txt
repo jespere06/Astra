@@ -1,0 +1,297 @@
+.
+├── _EXPORTADO
+│   └── todo_el_proyecto.txt
+├── analyze_context.py
+├── audit_ai_bloat.py
+├── client_simulation.py
+├── dataset_entrenamiento.csv
+├── docker-compose.infra.yml
+├── docker-compose.yml
+├── docs
+│   ├── api
+│   │   └── orchestrator
+│   ├── arquitectura.md
+│   ├── final.md
+│   ├── idea.md
+│   ├── modules-definitions
+│   │   ├── astra-builder.txt
+│   │   ├── astra-core.txt
+│   │   ├── astra-guard.txt
+│   │   ├── astra-ingest.txt
+│   │   ├── astra-learn.txt
+│   │   └── astra-orchestrator.txt
+│   ├── modules-roadmap
+│   │   └── done
+│   ├── new-idea.md
+│   ├── phase2-config-abstraction.md
+│   ├── phase2-learning-infra.md
+│   ├── phase2-mining-infra.md
+│   ├── pivot.md
+│   └── roadmap-gemeral.md
+├── generate_training_csv.py
+├── infra
+│   ├── local
+│   │   ├── check-infra.sh
+│   │   ├── data
+│   │   ├── docker-compose.yml
+│   │   ├── proxy
+│   │   └── scripts
+│   ├── production
+│   │   └── docker-compose.yml
+│   └── terraform
+│       └── guard_storage.tf
+├── libs
+│   └── shared-kernel
+│       ├── generated
+│       ├── node_modules
+│       ├── package-lock.json
+│       ├── package.json
+│       ├── proto
+│       ├── requirements.txt
+│       ├── scripts
+│       ├── src
+│       └── tests
+├── match_sesiones_optimizado.csv
+├── match_sessions.py
+├── minutes
+│   ├── ACTA NÂ° 002 DE ENERO 17 DE 2024 Primer debate proyecto acuerdo NÂ° 003 y 002 de 2024.docx
+│   ├── ACTA NÂ° 003 DE ENERO 17 DE 2024 Primer debate Proyecto de Acuerdo N 005 de 2024.docx
+│   ├── ACTA NÂ° 003 DE FEBRERO 21 DE 2024 Cumplimiento a los Acuerdos NÂ° 1131 de 2022 y 1057 de 2020.docx
+│   ├── ACTA NÂ° 004 DE ENERO 17 DE 2024 Continuacion del Primer debate proyecto acuerdo NÂ° 003 de 2024.docx
+│   ├── ACTA NÂ° 004 DE FEBRERO 28 DE 2024 - Estado de los escenarios deportivos de manizales - Sec Deporte.docx
+│   ├── ACTA N° 002 DE ENERO 17 DE 2024 Primer debate proyecto acuerdo N° 003 y 002 de 2024.docx
+│   ├── ACTA N° 003 DE ENERO 17 DE 2024 Primer debate Proyecto de Acuerdo N 005 de 2024.docx
+│   ├── ACTA N° 003 DE FEBRERO 21 DE 2024 Cumplimiento a los Acuerdos N° 1131 de 2022 y 1057 de 2020.docx
+│   ├── ACTA N° 004 DE ENERO 17 DE 2024 Continuacion del Primer debate proyecto acuerdo N° 003 de 2024.docx
+│   ├── ACTA N° 004 DE FEBRERO 28 DE 2024 - Estado de los escenarios deportivos de manizales - Sec Deporte.docx
+│   ├── ACTA N° 004 DE MARZO 11 DE 2024 Socialización a la consrtruccion del plan de desarrollo.docx
+│   ├── ACTA N° 005 DE FEBRERO 1 DE 2024 Primer debate proyecto acuerdo N° 008 de 2024.docx
+│   ├── ACTA N° 005 DE MARZO 12 DE 2024 Continuacion de la Socialización a la consrtruccion del plan de desarrollo.docx
+│   ├── ACTA N° 006 DE MARZO 13 DE 2024 Continuacion de la Socialización a la consrtruccion del plan de desarrollo.docx
+│   ├── ACTA N° 006 de julio 2 de 2024 Primer debate proyecto acuerdo N° 014 de 2024.docx
+│   ├── ACTA N° 007 DE ENERO 23 DE 2024 Primer debate proyecto acuerdo N° 004 de 2024.docx
+│   ├── ACTA N° 007 DE MARZO 14 DE 2024 Continuacion de la Socialización a la consrtruccion del plan de desarrollo.docx
+│   ├── ACTA N° 008 DE ENERO 10 DE 2024 - Socializacion red de urgencias y emergencias de manizales.docx
+│   ├── ACTA N° 008 DE FEBRERO 1 DE 2024 Primer debate proyecto acuerdo N° 008 de 2024.docx
+│   ├── ACTA N° 008 de mayo 16 de 2024 - Primer debate Proyecto de Acuerdo N 012 de 2024 Lote PTAR.docx
+│   ├── ACTA N° 009 DE ENERO 11 DE 2024 - Socializacion condiciones de salud mental en caldas DTSC.docx
+│   ├── ACTA N° 009 DE FEBRERO 7 DE 2024 Once Caldas Cumplimiento Acuerdo 1144 de 2023.docx
+│   ├── ACTA N° 010 DE ENERO 12 DE 2024 - Conversatorio como estamo en salud mental.docx
+│   ├── ACTA N° 010 de mayo 22 de 2024 - Primer debate proyecto acuerdo N° 011 de 2024 Modifica el PO 2024 y recursos del balance.docx
+│   ├── ACTA N° 011 DE ENERO 13 DE 2024 - Manizales como vamos informe de calidad de vida.docx
+│   ├── ACTA N° 011 de junio 12 de 2024 - Primer debate proyecto acuerdo N° 013 de 2024 Articulacion PDM y Pto 2024.docx
+│   ├── ACTA N° 012 DE ENERO 15 DE 2024 - Ptar Aguas de Manizales.docx
+│   ├── ACTA N° 013 DE ENERO 16 DE 2024 - DTSC Condiciones y atenciones en salud mental.docx
+│   ├── ACTA N° 015 DE ENERO 18 DE 2024 - Visita Cedros y la Juan XXIII.docx
+│   ├── ACTA N° 016 DE ENERO 20 DE 2024 - Segundo debate PA N 007 de 2024 Modifica el PTO.docx
+│   ├── ACTA N° 017 DE ENERO 22 DE 2024 - Aguas de Manizales empalme.docx
+│   ├── ACTA N° 018 DE ENERO 23 DE 2024 - Segundo debate PA N 005 de 2024 Consumo de SPA.docx
+│   ├── ACTA N° 019 DE ENERO 24 DE 2024 - Segundo debate PA N 002 de 2024 Vigencias futuras.docx
+│   ├── ACTA N° 020 DE ENERO 25 DE 2024 - Segundo debate PA N 001 de 2024 Modifica la estructura de la administracion.docx
+│   ├── ACTA N° 021 DE ENERO 26 DE 2024 - Socializacion lineamiento del plan de desarrollo 2024 - 2028.docx
+│   ├── ACTA N° 024 DE ENERO 30 DE 2024 - Contraloria informe de gestion 2022 - 2023.docx
+│   ├── ACTA N° 025 DE ENERO 31 DE 2024 - Segundo debate PA N 003 de 2024 honorarios ediles.docx
+│   ├── ACTA N° 027 DE FEBRERO 2 DE 2024 - Visita a la Linea 3 del cable aereo.docx
+│   ├── ACTA N° 028 DE FEBRERO 3 DE 2024 - Visita al SES Hospital de Caldas.docx
+│   ├── ACTA N° 030 DE FEBRERO 6 DE 2024 - Secretaria de educacion empalme .docx
+│   ├── ACTA N° 031 DE FEBRERO 7 DE 2024 - Continuacion Secretaria de educacion empalme .docx
+│   ├── ACTA N° 034 DE FEBRERO 10 DE 2024 - Informe de la Feria de Manizales 2024 y el Himno.docx
+│   ├── ACTA N° 035 DE FEBRERO 12 DE 2024 - Segundo debate PA N 008 de 2024 Facultades pro tempore al alcalde.docx
+│   ├── ACTA N° 038 DE FEBRERO 15 DE 2024 - Cable Aereo empalme .docx
+│   ├── ACTA N° 040 DE FEBRERO 17 DE 2024 - Comision regional de competitividad.docx
+│   └── ACTA N° 042 DE FEBRERO 21 DE 2024 - BIOS Proyectos de Tecnologia.docx
+├── modules
+│   └── astra-ingest
+│       ├── Cargo.toml
+│       ├── Dockerfile
+│       ├── _storage
+│       ├── alembic.ini
+│       ├── docker-compose.yml
+│       ├── migrations
+│       ├── minutes-templates
+│       ├── poetry.lock
+│       ├── pyproject.toml
+│       ├── requirements.txt
+│       ├── run_grpc.py
+│       ├── scripts
+│       ├── src
+│       ├── templates_report.csv
+│       └── tests
+├── node_modules
+│   └── concurrently -> .pnpm/concurrently@8.2.2/node_modules/concurrently
+├── ops
+│   ├── docker
+│   │   └── astra-trainer
+│   ├── helm
+│   │   └── astra-mlops
+│   ├── k8s
+│   │   └── templates
+│   └── scripts
+│       ├── fast_build.sh
+│       └── provision_server.sh
+├── package.json
+├── pnpm-lock.yaml
+├── roadmap.md
+├── scan.py
+├── scripts
+│   ├── setup_local_env.sh
+│   └── test_storage_connection.py
+├── services
+│   ├── astra-admin-ui
+│   │   └── src
+│   ├── astra-builder
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── src
+│   │   └── tests
+│   ├── astra-core
+│   │   ├── Dockerfile
+│   │   ├── Dockerfile.runpod
+│   │   ├── models
+│   │   ├── pyproject.toml
+│   │   ├── requirements.txt
+│   │   ├── runpod_handler.py
+│   │   ├── scripts
+│   │   ├── src
+│   │   └── tests
+│   ├── astra-dashboard
+│   │   ├── Dockerfile
+│   │   ├── index.html
+│   │   ├── node_modules
+│   │   ├── package-lock.json
+│   │   ├── package.json
+│   │   ├── postcss.config.js
+│   │   ├── src
+│   │   ├── tailwind.config.js
+│   │   └── vite.config.js
+│   ├── astra-guard
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── src
+│   │   └── tests
+│   ├── astra-learn
+│   │   ├── Dockerfile
+│   │   ├── Dockerfile.runpod
+│   │   ├── docker
+│   │   ├── requirements.txt
+│   │   ├── runpod_training_handler.py
+│   │   ├── src
+│   │   ├── tests
+│   │   └── worker
+│   ├── astra-orchestrator
+│   │   ├── Dockerfile
+│   │   ├── export_openapi.py
+│   │   ├── requirements.txt
+│   │   ├── run_grpc.py
+│   │   ├── src
+│   │   └── tests
+│   ├── astra-orchestrator-admin
+│   │   └── src
+│   ├── astra-worker
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   ├── scripts
+│   │   └── src
+│   └── tenant-config-service
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       └── src
+├── tests
+│   ├── e2e
+│   │   ├── conftest.py
+│   │   ├── requirements.txt
+│   │   ├── run_smoke_test.sh
+│   │   ├── samples
+│   │   ├── src
+│   │   └── test_happy_path.py
+│   └── fixtures
+│       ├── audio_seed.wav
+│       └── skeleton_seed.docx
+├── transcriptions
+│   ├── canary-1.t
+│   ├── conclusion.t
+│   ├── faster-whisper-large-v3-turbo-ct2.t
+│   ├── segundo_debate_al_pa_no_074_del_25_de_noviembre_de_2025_ptkj20_zlcs.t
+│   ├── stt_es_fastconformer_hybrid_large_pc-transcription.t
+│   └── whisper-large-v3-es.t
+├── tree.txt
+└── venv
+    ├── bin
+    │   ├── Activate.ps1
+    │   ├── __pycache__
+    │   ├── accelerate
+    │   ├── accelerate-config
+    │   ├── accelerate-estimate-memory
+    │   ├── accelerate-launch
+    │   ├── accelerate-merge-weights
+    │   ├── activate
+    │   ├── activate.csh
+    │   ├── activate.fish
+    │   ├── alembic
+    │   ├── distro
+    │   ├── dotenv
+    │   ├── f2py
+    │   ├── fastapi
+    │   ├── find_similar_images.py
+    │   ├── flask
+    │   ├── fonttools
+    │   ├── gunicorn
+    │   ├── hf
+    │   ├── httpx
+    │   ├── huey_consumer
+    │   ├── huey_consumer.py
+    │   ├── isympy
+    │   ├── jiwer
+    │   ├── jp.py
+    │   ├── mako-render
+    │   ├── markdown-it
+    │   ├── mlflow
+    │   ├── nltk
+    │   ├── normalizer
+    │   ├── openai
+    │   ├── pip
+    │   ├── pip3
+    │   ├── pip3.11
+    │   ├── protoc-gen-mypy
+    │   ├── protoc-gen-mypy_grpc
+    │   ├── pyftmerge
+    │   ├── pyftsubset
+    │   ├── pygmentize
+    │   ├── pyrsa-decrypt
+    │   ├── pyrsa-encrypt
+    │   ├── pyrsa-keygen
+    │   ├── pyrsa-priv2pub
+    │   ├── pyrsa-sign
+    │   ├── pyrsa-verify
+    │   ├── python -> /opt/anaconda3/envs/python311-base/bin/python
+    │   ├── python-grpc-tools-protoc
+    │   ├── python3 -> python
+    │   ├── python3.11 -> python
+    │   ├── spacy
+    │   ├── sqlformat
+    │   ├── tiny-agents
+    │   ├── tldextract
+    │   ├── torchfrtrace
+    │   ├── torchrun
+    │   ├── tqdm
+    │   ├── transformers
+    │   ├── ttx
+    │   ├── typer
+    │   ├── uvicorn
+    │   ├── watchfiles
+    │   ├── weasel
+    │   ├── websockets
+    │   ├── wheel
+    │   ├── wsdump
+    │   └── zipserver
+    ├── images
+    │   └── imagehash.png
+    ├── include
+    │   └── python3.11
+    ├── lib
+    │   └── python3.11
+    ├── pyvenv.cfg
+    └── share
+        └── man
+
+91 directories, 204 files

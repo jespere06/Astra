@@ -1,0 +1,42 @@
+[
+    {
+        "id": "tpl_bo_001",
+        "description": "Plantilla genérica de inicio de sesión",
+        "raw_text": "Iniciamos la sesión del día de hoy siendo las [HORA] horas. Secretaria, sírvase llamar a lista.",
+        "variables": ["HORA"],
+        "metadata": {
+            "type": "boilerplate",
+            "section": "apertura"
+        }
+    },
+    {
+        "id": "tpl_vt_001",
+        "description": "Plantilla de votación nominal simple",
+        "raw_text": "El concejal [CONCEJAL] vota [VOTO].",
+        "variables": ["CONCEJAL", "VOTO"],
+        "metadata": {
+            "type": "dynamic_table",
+            "structure_hash": "hash_votacion_simple"
+        }
+    },
+    {
+        "id": "tpl_as_001",
+        "description": "Plantilla de asistencia estándar",
+        "raw_text": "Concejal [CONCEJAL]: [ESTADO]",
+        "variables": ["CONCEJAL", "ESTADO"],
+        "metadata": {
+            "type": "dynamic_table",
+            "structure_hash": "hash_asistencia_std"
+        }
+    },
+    {
+        "id": "tpl_cierre_001",
+        "description": "Cierre de sesión estándar",
+        "raw_text": "Se levanta la sesión y se convoca para el día [FECHA] a las [HORA] horas.",
+        "variables": ["FECHA", "HORA"],
+        "metadata": {
+            "type": "boilerplate",
+            "section": "cierre"
+        }
+    }
+]

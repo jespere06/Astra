@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+python-multipart
+sqlalchemy
+psycopg2-binary
+lxml
+ImageHash
+Pillow
+boto3
+pydantic-settings
+qdrant-client>=1.7.0
+tqdm>=4.66.0
+typer>=0.9.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+requests>=2.31.0

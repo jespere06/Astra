@@ -1,0 +1,48 @@
+name: Build and Push ASTRA Trainer
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "services/astra-learn/**"
+      - ".github/workflows/deploy-trainer.yml"
+  workflow_dispatch: # Botón manual en GitHub
+
+env:
+  # ⚠️ PON AQUÍ TU USUARIO REAL DE DOCKER HUB (ej. jemeza06)
+  IMAGE_NAME: jemeza06/astra-trainer:v1
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Liberamos espacio en el servidor de GitHub (es necesario para imágenes CUDA)
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./services/astra-learn/Dockerfile.runpod
+          push: true
+          tags: ${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}-cache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}-cache,mode=max

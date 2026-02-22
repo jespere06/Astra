@@ -1,0 +1,104 @@
+version: '3.8'
+
+networks:
+  astra-net:
+    driver: bridge
+
+services:
+  # ==========================================
+  # INGRESS & SSL TERMINATION
+  # ==========================================
+  traefik:
+    image: traefik:v2.10
+    container_name: astra-traefik
+    restart: always
+    command:
+      - "--api.insecure=false" # Dashboard seguro
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}" # Email para SSL
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      # Redirección HTTP -> HTTPS Global
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/var/lib/astra/data/traefik/acme.json:/letsencrypt/acme.json"
+    networks:
+      - astra-net
+
+  # ==========================================
+  # DATA PLANE (Persistencia)
+  # ==========================================
+  
+  # 1. Base de Datos Relacional
+  postgres:
+    image: postgres:15-alpine
+    container_name: astra-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: astra_prod
+    volumes:
+      - /var/lib/astra/data/postgres:/var/lib/postgresql/data
+    networks:
+      - astra-net
+    # NO EXPOSE PORTS: Seguridad por defecto
+
+  # 2. Caché y Cola de Mensajes
+  redis:
+    image: redis:7-alpine
+    container_name: astra-redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - /var/lib/astra/data/redis:/data
+    networks:
+      - astra-net
+
+  # 3. Base de Datos Vectorial
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: astra-qdrant
+    restart: always
+    environment:
+      # Optimización para VPS con RAM limitada
+      - QDRANT__STORAGE__ON_DISK_PAYLOAD=true
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - /var/lib/astra/data/qdrant:/qdrant/storage
+    networks:
+      - astra-net
+
+  # 4. Object Storage (Self-Hosted S3)
+  minio:
+    image: minio/minio:latest
+    container_name: astra-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - /var/lib/astra/data/minio:/data
+    networks:
+      - astra-net
+    labels:
+      - "traefik.enable=true"
+      # Router para API S3 (s3.astra.io)
+      - "traefik.http.routers.minio-api.rule=Host(`${DOMAIN_S3}`)"
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls.certresolver=myresolver"
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+      # Router para Consola (console.astra.io)
+      - "traefik.http.routers.minio-console.rule=Host(`${DOMAIN_CONSOLE}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls.certresolver=myresolver"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"

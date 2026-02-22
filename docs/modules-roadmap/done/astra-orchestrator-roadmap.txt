@@ -1,0 +1,226 @@
+# Plan de Ejecución Técnica: Fase de Implementación Core ASTRA-ORCHESTRATOR
+
+## 1. Meta / Objetivo de la Fase
+Establecer el "Sistema Nervioso Central" de la plataforma ASTRA. El objetivo es implementar el servicio de orquestación transaccional y gestión de estado (Stateful Session Management) que coordine la ingesta de audio en tiempo real, mantenga la coherencia del contexto del tenant (Version Pinning) y garantice la entrega atómica de la carga de trabajo final a los motores de construcción (BUILDER) y auditoría (GUARD).
+
+## 2. Suposiciones Iniciales
+1.  **Dependencias Upstream:** ASTRA-CORE y ASTRA-BUILDER exponen APIs REST/gRPC documentadas y funcionales en entorno de staging.
+2.  **Infraestructura de Datos:** Redis (Cluster mode) y S3 (con políticas CORS configuradas) están provisionados y accesibles.
+3.  **Gestión de Identidad:** Existe un proveedor de identidad (IdP) externo (ej. Auth0 o Keycloak) que emite JWTs válidos con claims de `tenant_id`.
+4.  **Configuración de Tenants:** Existe un servicio o base de datos accesible donde residen las configuraciones base (`style_map`, `skeleton_id` default) por tenant.
+
+## 3. Análisis de Impacto
+*   **Servicios Afectados:**
+    *   **Redis:** Uso intensivo para mantener el estado de sesiones vivas (escrituras frecuentes, lecturas en bloque al finalizar).
+    *   **API Gateway:** El Orchestrator se convierte en el único punto de entrada público; requiere configuración robusta de Rate Limiting y CORS.
+    *   **ASTRA-CORE:** Aumento de tráfico directo; requiere manejo de backpressure si CORE se satura.
+*   **Riesgos Directos:**
+    *   **Pérdida de Estado:** Si Redis falla sin persistencia adecuada, se pierden las sesiones activas (grabaciones en curso).
+    *   **Cuello de Botella:** Al ser el punto central, un fallo aquí detiene toda la operación de la plataforma.
+    *   **Latencia Percibida:** La suma de latencias (Orch -> Core -> Redis) impacta la experiencia de usuario en tiempo real.
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+### [Fase3-T01] Estructura de Datos en Redis (Session Store)
+*   **Título:** Modelado de Estado de Sesión en Redis (Hash + ZSET + Key Versioning)
+*   **Descripción:** Definir la estructura para resiliencia. **Reordenamiento Lógico (Ruta 8):** Usar **Redis ZSET** (Score = `sequence_id`) para garantizar que los bloques se procesen en el orden correcto independientemente de la latencia de llegada. **Recuperación de Sesiones Zombie (Ruta 13):** TTL de 24h + Graveyard Worker.
+*   **Dónde:** `src/models/redis_store.py`
+*   **Prioridad:** P0
+*   **Estimación:** 14 horas
+*   **Entregables:** Schema de Redis y métodos de acceso (get, append, update).
+*   **Dependencias:** Ninguna
+*   **Entregables:** Servicio "Hello World" con conexión a Redis y Healthcheck.
+*   **Criterios de Éxito (DoD):** Endpoint `/health` responde 200 OK verificando ping a Redis.
+*   **Tests requeridos:** (Integration) Test de escritura/lectura en Redis.
+*   **Riesgos:** Configuración incorrecta de timeouts en Redis bajo carga.
+
+### [Fase3-T02] Gestión de Sesiones: Inicio y Version Pinning
+*   **Título:** Implementación de `startSession` y Congelación de Contexto
+*   **Descripción:** Crear endpoint `POST /session/start`. **Contexto de Localización (Ruta 14/16):** Recibir obligatoriamente el `client_timezone` (ISO string). El sistema debe ser Timezone Aware; CORE y BUILDER usarán este valor para renderizar timestamps legales. Consultar Tenant Config Service, obtener mapa de zonas, `adapter_id` y `style_map`. **Version Pinning (Ruta 3):** Se debe persistir el `skeleton_id` y el `s3_version_id` exacto al inicio de la sesión para garantizar la inmutabilidad de la plantilla durante la ejecución. **Check de Modelo (Ruta 6):** Verificar flag `NEW_MODEL_AVAILABLE:{tenant_id}` emitido por LEARN.
+*   **Dónde:** `src/controllers/session.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase3-T01]
+*   **Entregables:** Endpoint funcional y congelación de contexto base con validación de versión.
+*   **Criterios de Éxito (DoD):** Crear una sesión congela la configuración; se detecta el flag de modelo nuevo al inicio para forzar actualización. **Crítico (Auditoría v2.1):** Al iniciar la sesión, el Orquestador **debe consultar al Tenant Config Service** (cuya propiedad y persistencia en Postgres recae sobre el equipo de Orquestación) para cargar tanto el "Zone Mapping" (`template_id` -> `target_placeholder`) como el "Table Mapping" (`intent_id` -> `target_table_id`). Estos mapas son la fuente de verdad para el ruteo de bloques y tablas dinámicas.
+*   **Tests requeridos:** (Integration) Crear sesión, modificar config externa, verificar que sesión mantiene valores originales.
+*   **Riesgos:** Latencia alta al consultar servicios de configuración externos.
+
+### [Fase3-T02.1]
+*   **Título:** UI de Mapeo de Plantillas (Orchestrator Admin)
+*   **Descripción:** Interfaz para que el administrador asocie los `template_ids` (descubiertos por INGEST) a posiciones específicas dentro del Skeleton (ej: `TPL_PROPOSICIONES` -> `Body:Section_4`). Es el puente que permite al Orquestador saber dónde inyectar lo que CORE detectó.
+*   **Dónde:** `/services/astra-orchestrator-admin`
+*   **Prioridad:** P1
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase3-T02]
+
+### [Fase3-T02.2]
+*   **Descripción:** Implementar `PATCH /session/{id}/current-context`. **Inyección de Identidad (Ruta 6):** Permitir actualizar el `current_speaker_id` o el tema en tiempo real sin reiniciar la sesión. CORE usará estos metadatos para los siguientes bloques. **Privacidad (Nivel 4 - Ruta 4):** Permitir marcar fragmentos como `RESTRICTED`.
+*   **Dónde:** `src/controllers/session.py`
+*   **Prioridad:** P1
+*   **Estimación:** 10 horas
+*   **Dependencias:** [Fase3-T02]
+
+### [Fase3-T03] Pipeline de Ingesta de Chunks (Append)
+*   **Título:** Orquestación Síncrona Orch -> CORE -> Redis
+*   **Descripción:** Endpoint `POST /session/{id}/append`. **Fallo de IA (Auditoría v2.1):** Si CORE falla o hace timeout, el Orquestador **NO** debe descartar el audio; debe marcar el bloque en Redis como `AUDIO_PENDING`, guardar el blob en un bucket de failover de S3 y **generar una URL Presignada de larga duración (7 días)**, inyectándola en el campo `data.fallback_url` del bloque. **Mapeo de Tablas (Auditoría v2.1):** Si CORE retorna un `Intent` estructurado, el Orquestador debe utilizar el mapa de tablas cargado para traducir dicho `Intent` al `target_placeholder` (que es el `TBL_ID` físico en el XML) antes de persistir en Redis. **VAD & Silencio (Ruta 19):** Implementar Voice Activity Detection (VAD) básico para descartar chunks sin voz y optimizar costos. **Circuito Breaker Financiero (Ruta 15/17):** Verificar saldo y aplicar **Graceful Degradation:** Fallback a "Audio Only" si la cuota de IA se agota, permitiendo que la sesión continúe para corrección manual. **Pausas:** Gap > 60s inyecta `SYSTEM_NOTE`.
+*   **Dónde:** `src/services/processor.py`
+*   **Prioridad:** P0
+*   **Estimación:** 24 horas
+*   **Dependencias:** [Fase3-T02]
+*   **Entregables:** Flujo de recepción con lógica de degradación segura ante IDs desconocidos.
+*   **Criterios de Éxito (DoD):** Un `template_id` inesperado resulta en un bloque de texto normal sin fallar la sesión.
+*   **Tests requeridos:** (E2E Mocked) Simular respuesta de CORE y validar estado final en Redis.
+*   **Riesgos:** Fallo en CORE deja el request colgado; implementar Circuit Breaker.
+
+### [Fase3-T03.1]
+*   **Título:** Optimización de Entrega (S3 Handover)
+*   **Descripción:** Para sesiones masivas (Ruta 4). En el paso `finalize`, si el payload de bloques supera un umbral (ej. 5MB), el Orquestador debe volcar el JSON completo de Redis a S3 (`session_dump.json`) y pasar al BUILDER únicamente la URL de referencia: `{ "session_ref": "s3://.../dump.json" }`. Esto evita problemas de OOM y timeouts HTTP en payloads grandes.
+*   **Dónde:** `src/logic/finalizer.py`
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase3-T01]
+*   **Entregables:** Lógica de handover por referencia para llamadas al Builder. **Crítico (Ruta 4: Marathon Session):** El contrato con el Builder debe soportar **Reference Passing**. Si los datos exceden el límite, enviar la URL de S3 en lugar del body JSON completo.
+
+### [Fase3-T04] Gestión de Activos Multimedia (Upload Proxy)
+*   **Descripción:** Endpoint `POST /session/{id}/upload-asset`. **The Asset Loop (Ruta 7):** Antes de subir a S3, el Orquestador debe calcular el hash del archivo y **consultar a `ASTRA-INGEST` vía gRPC** (`CheckAssetDuplicate`). Aplicar política de **Fail-Open**: si la llamada excede los 50ms o falla, el Orquestador sube el asset como nuevo para garantizar la disponibilidad UX (Auditoría R-04).
+*   **Dónde:** `src/services/storage.py`, `src/controllers/assets.py`
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase3-T02], [Fase3-T11]
+*   **Entregables:** Capacidad de adjuntar imágenes optimizadas a la sesión.
+*   **Criterios de Éxito (DoD):** Imagen subida a S3 y referenciada correctamente en el buffer de sesión.
+*   **Tests requeridos:** (Integration) Subida real a bucket S3 de staging.
+*   **Riesgos:** Subidas de archivos maliciosos (validar Magic Bytes).
+
+### [Fase3-T05] Finalización y Construcción (The Draining Handoff)
+*   **Título:** Ensamblaje de Payload, Estado de Draining y Llamada a Builder
+*   **Descripción:** Endpoint `POST /session/{id}/finalize`. **Estado de Draining (Ruta 9):** El sistema debe verificar en Redis si hay bloques en estado `PROCESSING`. Si existen, responder `202 Accepted` solicitando reintento. **Interfaz de Usuario (UX):** El backend debe retornar un flag `is_draining: true` para que la UI deshabilite los botones de "Descargar" y "Cerrar" hasta que el Orquestador dé el OK final. No llamar al BUILDER hasta que todos los chunks del cliente (validados por `sequence_id` y reordenados lógicamente) hayan sido procesados para evitar pérdida de datos (Ruta 8). **Handover (Ruta 4):** Si el payload es >5MB, pasar por referencia S3. **Idempotencia (Nivel 4):** Bloqueo mediante Lock Distribuido en Redis.
+*   **Prioridad:** P0
+*   **Estimación:** 24 horas
+*   **Dependencias:** [Fase3-T03]
+*   **Título:** Clonación de Sesiones Cerradas para Corrección (V2 Support)
+*   **Descripción:** Implementar `POST /session/{id}/clone`. **Corrección Post-Cierre (Ruta 18):** Permite "reabrir" un acta inmutable creando una nueva `session_id` (V2). Copia el estado desde el backup de S3, permite nuevas ediciones y genera un Snapshot en GUARD vinculado mediante `parent_snapshot_id` para mantener la trazabilidad legal (Chain of Custody).
+*   **Prioridad:** P2
+*   **Estimación:** 12 horas
+*   **Prioridad:** P2
+*   **Estimación:** 12 horas
+
+### [Fase3-T05.1]
+*   **Título:** Garbage Collection de Assets (S3 Cleanup)
+*   **Descripción:** Tras finalizar con éxito, comparar la lista de assets subidos (`session:{id}:uploaded_assets`) contra los bloques finales. Encolar los activos huérfanos para eliminación asíncrona de S3 (Ruta 3).
+*   **Prioridad:** P2
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase3-T03], [Fase3-T04]
+*   **Entregables:** Integración completa con el motor de construcción y archivado forense.
+*   **Criterios de Éxito (DoD):** Llamada a finalize retorna URL de descarga y confirma que el audio ha sido movido a custodia (GUARD). **Audio Handover (Auditoría v2.1):** Antes de borrar la sesión, el Orchestrator debe ejecutar un `S3 CopyObject` del audio crudo desde el bucket temporal hacia el bucket WORM de `ASTRA-GUARD`, garantizando la cadena de custodia.
+*   **Tests requeridos:** (E2E) Flujo completo desde `start` hasta `finalize` con mocks de servicios externos.
+*   **Riesgos:** Payload demasiado grande para una sola llamada HTTP (implementar compresión o paso por referencia S3 si aplica).
+
+### [Fase3-T06] Integración con ASTRA-GUARD (Auditoría)
+*   **Título:** Encadenamiento de Firma y Auditoría
+*   **Descripción:** Una vez el Builder retorna el DOCX (o su ubicación), el Orchestrator debe orquestar el llamado a ASTRA-GUARD para generar el snapshot de integridad. Solo tras el OK de Guard, se retorna la URL final al cliente.
+*   **Dónde:** `src/services/guard_client.py`
+*   **Owner sugerido:** Backend Engineer (Security focus)
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase3-T05]
+*   **Entregables:** Documentos generados con hash de integridad verificado.
+*   **Criterios de Éxito (DoD):** Respuesta final incluye `integrity_hash`.
+*   **Tests requeridos:** (Unit) Mock de Guard fallando debe impedir entrega del documento.
+
+### [Fase3-T07] Mecanismos de Resiliencia y Fallback de Audio
+*   **Título:** Estrategia de Resiliencia y Fallback `AUDIO_PENDING`
+*   **Descripción:** Envolver clientes HTTP con resiliencia. **Lógica Crucial:** Si CORE falla tras retries, el Orquestador debe marcar el bloque en Redis como `TYPE: AUDIO_PENDING`, guardar el blob de audio en S3 y registrar para procesamiento asíncrono. El BUILDER debe ser capaz de insertar un placeholder en el DOCX final si el bloque sigue pendiente.
+*   **Dónde:** `src/infrastructure/resilience.py`, `src/services/fallback_worker.py`
+*   **Owner sugerido:** SRE / Senior Backend
+*   **Prioridad:** P1
+*   **Estimación:** 20 horas
+*   **Dependencias:** [Fase3-T03]
+*   **Entregables:** Pipeline de recuperación de audio en fallos de IA.
+
+### [Fase3-T08]
+*   **Título:** Normalización de Media (AssetLibrary Optimization)
+*   **Descripción:** Middleware que intercepta la subida de archivos. 1. **Normalización:** Redimensiona y comprime imágenes (max 1920px) para evitar actas gigantes (Ruta 7). 2. **Deduplicación:** Calcular hash de la imagen y **consultar a la AssetLibrary de INGEST** before any upload. Si ya existe, usar el ID existente para ahorrar espacio y optimizar el build (Ruta 4).
+*   **Dónde:** `src/middleware/media_cleaner.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase3-T01]
+*   **Entregables:** Servicio de assets optimizado.
+
+### [Fase3-T09] Seguridad y Middleware de Autenticación
+*   **Título:** Validación de JWT y Contexto de Tenant
+*   **Descripción:** Implementar Middleware que intercepta cada request, valida la firma del JWT, extrae `tenant_id` y lo inyecta en el contexto del request local. Asegurar que las operaciones sobre `session:{id}` validen que la sesión pertenece al tenant del token.
+*   **Dónde:** `src/middleware/auth.py`
+*   **Owner sugerido:** Security Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase3-T01]
+*   **Entregables:** API protegida.
+*   **Criterios de Éxito (DoD):** Request con token de Tenant A falla al intentar acceder a sesión de Tenant B (403 Forbidden).
+*   **Riesgos:** Configuracion incorrecta de llaves públicas del IdP.
+
+### [Fase3-T10] Limpieza y TTL
+*   **Título:** Políticas de Expiración de Sesiones
+*   **Descripción:** Configurar TTL en llaves de Redis (ej. 24 horas). Implementar Cron Job o lógica "fire-and-forget" post-finalización para limpiar archivos temporales en S3 (assets intermedios) si aplica.
+*   **Dónde:** `src/services/cleanup.py`
+*   **Owner sugerido:** Junior Backend
+*   **Prioridad:** P2
+*   **Estimación:** 6 horas
+*   **Dependencias:** [Fase3-T02]
+*   **Entregables:** Gestión eficiente de almacenamiento.
+*   **Criterios de Éxito (DoD):** Sesiones abandonadas desaparecen de Redis automáticamente tras X tiempo.
+
+### [Fase3-T11] Hub de Sesión y Comunicación (gRPC/Redis)
+*   **Título:** ASTRA-ORCHESTRATOR: Hub de Sesión y Comunicación (gRPC/Redis)
+*   **Descripción:** Implementar el "Director de Orquesta" que maneja el ciclo de vida de la sesión. Orquestar el flujo: Trigger Ingest -> Loop Core (Hotfixes) -> Trigger Builder. Gestión de estados persistentes en Redis.
+*   **Donde:** `/services/astra-orchestrator`
+*   **Owner sugerido:** Backend Lead
+*   **Prioridad:** P0
+*   **Estimación:** 40 horas
+*   **Dependencias:** Infraestructura base (Redis)
+*   **Entregables:** Servicio gRPC con contratos `SessionService`.
+*   **Criterios de Éxito:** Flujo E2E simulado (Mock inputs/outputs) funcionando en menos de 5 segundos.
+
+### [Fase3-T12] Documentación API y Swagger
+*   **Título:** Exposición de OpenAPI Spec
+*   **Descripción:** Generar y pulir la documentación automática (Swagger UI / ReDoc). Añadir ejemplos de payloads para `/append` y `/finalize`.
+*   **Dónde:** `src/docs`, `openapi.yaml`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P2
+*   **Estimación:** 4 horas
+*   **Dependencias:** Tareas de Endpoints
+*   **Entregables:** URL `/docs` accesible.
+*   **Criterios de Éxito (DoD):** Un desarrollador frontend puede integrar la API solo leyendo la documentación.
+
+---
+
+## 5. Directivas de Calidad
+1.  **Stateless Compute:** El pod del orquestador no debe guardar nada en memoria RAM local (variables globales) que no sea caché de configuración. Todo estado de sesión va a Redis.
+2.  **Validación Estricta:** No confiar en la salida de CORE ciegamente. Validar esquema JSON antes de insertar en Redis.
+3.  **Timeouts Agresivos:** Configurar timeouts cortos (ej. 5s) hacia CORE y largos (ej. 60s) hacia BUILDER, acorde a la naturaleza de cada servicio.
+4.  **Logging Contextual:** Cada log debe incluir `trace_id`, `tenant_id` y `session_id` para trazabilidad distribuida.
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| Riesgo | Impacto | Probabilidad | Owner | Mitigación |
+| :--- | :---: | :---: | :--- | :--- |
+| **Pérdida de datos en Redis** | Crítico | Baja | DevOps | Habilitar persistencia AOF (Append Only File) en Redis y configurar réplicas. |
+| **Latencia acumulada inaceptable** | Alto | Media | Tech Lead | Implementar procesamiento asíncrono para `/append` si la respuesta al cliente no requiere confirmación inmediata de CORE (Ack rápido). |
+| **Inconsistencia de Configuración** | Medio | Baja | Backend | Version Pinning estricto al inicio de la sesión (T02). |
+| **Saturación por archivos grandes** | Medio | Media | Infra | Configurar límites de tamaño de body en Nginx/Ingress y usar Multipart uploads directos a S3 para assets grandes. |
+
+## 7. Checklist de Aceptación Global (DoD)
+*   [ ] **Flujo E2E:** `Start` -> `Append` (Audio) -> `Upload` (Img) -> `Finalize` genera un DOCX válido y auditado.
+*   [ ] **Aislamiento:** Pruebas de seguridad confirman que no hay fugas de datos entre tenants (Cross-tenant access denied).
+*   [ ] **Resiliencia:** El sistema recupera el estado de la sesión tras un reinicio del pod del Orquestador (gracias a Redis).
+*   [ ] **Performance:** Latencia de `/append` < 500ms (excluyendo tiempo de CORE).
+*   [ ] **Observabilidad:** Dashboards en Grafana muestran métricas de sesiones activas, tasa de errores y latencia por endpoint.
+*   [ ] **Artefactos:** Docker image `astra-orchestrator:v1`, Colección de Postman para pruebas.
+
+## 8. Export CSV
+SI

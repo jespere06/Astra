@@ -1,0 +1,137 @@
+# Roadmap de Ejecución: Fase 3 - ASTRA GUARD (The Vault)
+
+## 1. Meta / Objetivo de la Fase
+Construir la fortaleza de seguridad y cumplimiento legal de la plataforma. El objetivo es implementar el sistema de **Integridad Inmutable** y **Aislamiento Multi-tenant**. Al finalizar, ASTRA podrá garantizar matemáticamente que un documento no ha sido alterado desde su generación, ofrecer pruebas forenses (Merkle Trees) y gestionar el versionado histórico (Time-Travel) bajo un modelo de cifrado estricto (Envelope Encryption).
+
+## 2. Suposiciones Iniciales
+1.  **KMS Simulado:** Para desarrollo local se utilizará **LocalStack** (simulando AWS KMS) o **Vault** en modo dev para la gestión de llaves maestras.
+2.  **Almacenamiento WORM:** Se asume que el almacenamiento de objetos (MinIO/S3) está configurado con soporte de *Object Lock* (Retention Compliance Mode).
+3.  **Carga Diferida:** Aunque la verificación es síncrona, el cálculo de hash para archivos gigantes (>100MB) se optimizará mediante streaming, no carga total en RAM.
+4.  **Schema Existente:** La base de datos PostgreSQL ya existe (Fase 1/2); esta fase solo inyecta las tablas del dominio `guard`.
+
+## 3. Análisis de Impacto
+*   **Infraestructura:** Requiere habilitar *Object Lock* en buckets S3 (irreversible en producción). Incremento en costes de almacenamiento por retención de versiones.
+*   **Performance:** El proceso de `finalize` en el Orchestrator tendrá una latencia añadida (~200-800ms) por el cálculo del hash y firma antes de retornar al cliente.
+*   **Seguridad:** Este módulo se convierte en el "Root of Trust". Un fallo aquí compromete la validez legal de todos los documentos.
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+**[GRD-01]** [X]
+- **Título:** Infraestructura de Persistencia y WORM
+- **Descripción:** Definir esquemas DDL para `snapshots`, `audit_logs` y `merkle_roots`. **Prerrequisito (Auditoría v2.1):** Provisionar mediante Terraform buckets de MinIO/S3 con políticas de *Object Lock* (Compliance Mode) y *Versioning* activas antes de proceder con el código de sellado. Configurar LocalStack KMS con llaves CMK separadas para 2 tenants de prueba.
+- **Dónde:** `/infra/terraform` y `/services/astra-guard/db/migrations`
+- **Owner sugerido:** DevOps / Backend Lead
+- **Prioridad:** P0
+- **Estimación:** 12 horas
+- **Dependencias:** Ninguna
+- **Entregables:** Scripts SQL, Terraform/Docker-Compose actualizado.
+- **Criterios de Éxito (DoD):** Intentar borrar un archivo "locked" en MinIO retorna error 403/MethodNotAllowed. Tablas creadas.
+- **Tests requeridos:** Integration (test de inmutabilidad de almacenamiento).
+- **Riesgos:** Configuración incorrecta de retención que permita borrado accidental.
+
+**[GRD-02]** [X]
+- **Título:** Motor de Integridad (Merkle Tree Builder)
+- **Descripción:** Implementar el núcleo criptográfico. Función que acepta un Stream binario, lo divide en chunks (ej. 4MB), calcula SHA-256 de cada hoja y construye el Merkle Root. Debe ser puramente algorítmico y sin efectos secundarios (I/O).
+- **Dónde:** `/services/astra-guard/src/crypto/merkle.py` (o Rust module)
+- **Owner sugerido:** Senior Backend Dev
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** GEN-01 (Shared Kernel)
+- **Entregables:** Librería/Clase `MerkleEngine`.
+- **Criterios de Éxito (DoD):** Hash de archivo de 1GB calculado en < 2s (o streaming eficiente). Salida determinista. **Crítico (Ruta 5: Integrity Trap):** El motor debe implementar la **"Normalización Canónica de OOXML"**. Debe descomprimir el `.docx` en memoria, ignorar XMLs volátiles (`docProps/core.xml`, timestamps de modificación), ordenar archivos alfabéticamente y hashear exclusivamente el stream del contenido semántico (`word/*`). Esto garantiza que el hash sea robusto ante la operación de "Abrir y Guardar" de Microsoft Word.
+- **Tests requeridos:** Unit tests con vectores de prueba estándar (NIST vectors si aplica, o archivos conocidos).
+- **Riesgos:** Uso excesivo de memoria en archivos grandes.
+
+**[GRD-03]** [X]
+- **Título:** Gestor de Cifrado (KMS Envelope Wrapper)
+- **Descripción:** Crear la capa de abstracción para el KMS. Implementar `KeyManager` que solicite una llave de datos (DEK) cifrada con la CMK del tenant para firmar el `rootHash`. No implementa cifrado propio, delega al proveedor (AWS/Vault).
+- **Dónde:** `/services/astra-guard/src/crypto/kms_provider.py`
+- **Owner sugerido:** Security Engineer
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** GRD-01
+- **Entregables:** Servicio capaz de firmar/verificar payloads.
+- **Criterios de Éxito (DoD):** Firma válida generada con llave simulada. Error explícito si se pide llave de Tenant A para Tenant B.
+- **Tests requeridos:** Integration tests con LocalStack.
+- **Riesgos:** Latencia de red hacia el KMS. Implementar reintentos (Exponential Backoff).
+
+**[GRD-04]** [X]
+- **Título:** API de Snapshots e Integridad Canónica (Ruta 5)
+- **Descripción:** Implementar controladores `POST /snapshots` y `GET /verify`. **Integridad Canónica (Ruta 5):** Al verificar, el sistema no debe hashear el archivo ZIP completo. Debe descomprimir, ignorar metadatos volátiles (`docProps/core.xml`) y hashear solo el stream de contenido normalizado. Esto permite que abrir el acta en Word no rompa la validez legal.
+- **Dónde:** `/services/astra-guard/src/api`
+- **Owner sugerido:** Backend Dev
+- **Prioridad:** P0
+- **Estimación:** 20 horas
+- **Dependencias:** GRD-02, GRD-03
+- **Entregables:** Endpoints funcionales según contrato OpenAPI.
+- **Criterios de Éxito (DoD):** Flujo completo: subir archivo -> obtener `snapshot_id`.
+- **Tests requeridos:** E2E test (subida y verificación).
+- **Riesgos:** Inconsistencia entre archivo guardado y hash calculado si falla la escritura a mitad de camino.
+
+**[GRD-05]** [X]
+*   **Título:** Recuperación Histórica y Paquete de Evidencia (Evidence Package)
+*   **Descripción:** Implementar endpoint `GET /time-travel`. **Integridad Semántica (Ruta 5):** Hash de Texto Puro + Estructura Lógica. **Idempotencia de Archivado (Nivel 4 - Ruta 3):** `HEAD` check previo en WORM. **Privacidad (Nivel 4 - Ruta 4):** Honorar flag `RESTRICTED`. **Encadenamiento de Versiones (Ruta 10):** El manifiesto de navegación debe soportar el campo `parent_snapshot_id`. Esto permite vincular versiones clonadas de una sesión (para correcciones post-cierre), manteniendo una cadena de custodia ininterrumpida desde la versión original hasta la corregida (V2).
+*   **Dónde:** `src/logic/recovery.py`
+*   **Owner sugerido:** Backend Dev
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** GRD-04
+*   **Entregables:** Endpoint de recuperación histórica multimedial (E-Discovery package).
+*   **Criterios de Éxito (DoD):** El ZIP descargado contiene el Word abrible y el audio reproducible, ambos con sus hashes de integridad correspondientes y validez legal verificable.
+- **Tests requeridos:** Integration tests con escenarios de múltiples versiones.
+- **Riesgos:** Complejidad en índices temporales de PostgreSQL.
+
+**[GRD-06]** [X]
+- **Título:** Middleware de Aislamiento Estricto (Tenant Firewall)
+- **Descripción:** Implementar validación cruzada obligatoria. Cada request debe verificar que el `tenant_id` del JWT coincida con el `tenant_id` propietario del Snapshot y de la llave KMS. Rechazar cualquier acceso cruzado.
+- **Dónde:** `/services/astra-guard/src/middleware/auth.py`
+- **Owner sugerido:** Security Lead
+- **Prioridad:** P0
+- **Estimación:** 8 horas
+- **Dependencias:** GRD-04
+- **Entregables:** Middleware de seguridad aplicado a todas las rutas.
+- **Criterios de Éxito (DoD):** Test de penetración (unitario) donde Tenant A intenta leer Snapshot de Tenant B devuelve 403.
+- **Tests requeridos:** Security Unit Tests (casos negativos).
+- **Riesgos:** Fugas de información por configuración laxa.
+
+**[GRD-07]**
+- **Título:** Bóveda de Evidencia Auditiva (WORM Audio)
+- **Descripción:** Implementar el módulo de custodia de audio. El sistema debe copiar el audio crudo desde el Orquestador al bucket `vault-audio` de Guard. **Confirmación de Handover (Auditoría v2.1):** La bóveda recibe los blobs de audio crudo vía `S3 CopyObject` iniciado por el Orquestador al finalizar la sesión. Guard debe verificar la existencia del objeto y registrar el hash binario del audio en el snapshot de sesión para su preservación legal permanente.
+*   **Dónde:** `/services/astra-guard/src/audio_archiver.py`
+*   **Owner sugerido:** Backend Dev
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** GRD-04
+*   **Entregables:** Servicio de archivado de audio inmutable y sincronizado.
+*   **Criterios de Éxito (DoD):** Audio crudo inaccesible para borrado y verificado criptográficamente en conjunto con el documento.
+- **Tests requeridos:** Integration tests de archivado y recuperación.
+- **Riesgos:** Gran volumen de datos de audio impactando costos de almacenamiento.
+
+---
+
+## 5. Directivas de Calidad
+1.  **Cero Confianza en Input:** ASTRA-GUARD nunca confía en el hash enviado por el cliente/builder. Siempre recalcula el hash del binario recibido.
+2.  **Inmutabilidad Real:** Prohibido implementar rutas de `DELETE` o `UPDATE` para Snapshots o Logs. Solo `INSERT` y `SELECT`.
+3.  **Crypto-Agility:** Los algoritmos (SHA-256, RSA-PSS) no deben estar *hardcoded* en la lógica profunda, sino definidos como constantes/configuración para permitir rotación futura a SHA-3 o post-quantum.
+4.  **Logging Forense:** Cada operación de lectura/escritura en Guard genera un registro en `audit_logs` con IP, UserID, Timestamp y Hash afectado.
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| ID | Riesgo | Probabilidad | Impacto | Mitigación |
+|----|--------|--------------|---------|------------|
+| R1 | **Pérdida de Llaves KMS:** Si se pierde la CMK de un tenant, los datos son irrecuperables. | Baja | Catastrófico | Procedimiento operativo de Backup de Llaves (fuera de alcance de sw, pero requisito infra). Uso de Multi-Region Keys. |
+| R2 | **Cuello de Botella:** El hashing de archivos grandes bloquea el event loop. | Media | Alto | Usar `threads` o procesos separados (workers) para el cálculo de hash, no bloquear el hilo principal de la API. |
+| R3 | **Falsos Positivos en Integridad:** Metadatos cambiantes (ej. fecha acceso) alteran el hash del archivo. | Alta | Medio | Normalización estricta antes de hashear. Hashear solo el contenido (stream de bytes), ignorar metadatos del sistema de archivos. |
+| R4 | **Storage Blowout:** Costos de almacenamiento disparados por versiones infinitas. | Media | Bajo (Inicial) | Configurar Lifecycle Rules en S3 para mover versiones antiguas a Glacier tras 90 días (Tarea Infra). |
+
+## 7. Checklist de Aceptación (DoD Global)
+- [ ] **Hash Determinista:** El mismo archivo subido 10 veces genera el mismo `rootHash` y 10 entradas de snapshot vinculadas.
+- [ ] **WORM:** Confirmación técnica de que los archivos en el bucket `vault` no se pueden sobrescribir ni borrar manualmente.
+- [ ] **Aislamiento:** Un intento de verificar un documento con la llave del tenant equivocado falla criptográficamente.
+- [ ] **Performance:** Snapshot de 50MB procesado y confirmado en < 1.5 segundos.
+- [ ] **Trazabilidad:** Existe un log de auditoría consultable para cada operación realizada durante la fase.
+
+## 8. Export CSV
+`NO`

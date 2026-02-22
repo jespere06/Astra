@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package astra.session.v1;
+
+import "astra_models.proto";
+
+service SessionOrchestrator {
+  // Inicia una nueva sesión y congela la configuración del tenant
+  rpc StartSession (SessionStartReq) returns (astra.shared.v1.SessionContext);
+
+  // Streaming bidireccional para envío de audio en tiempo real
+  // El cliente envía chunks, el servidor responde con el estado de procesamiento (ACKs/Resultados)
+  rpc StreamAudio (stream AudioStreamChunk) returns (stream ProcessResult);
+
+  // Actualiza el contexto dinámico (Orador, Tema)
+  rpc UpdateContext (ContextUpdateReq) returns (astra.shared.v1.SessionContext);
+
+  // Cierra la sesión y detona la construcción del documento
+  rpc FinalizeSession (FinalizeReq) returns (FinalizeResp);
+}
+
+message SessionStartReq {
+  string tenant_id = 1;
+  string skeleton_id = 2;
+  string client_timezone = 3;
+  map<string, string> metadata = 4;
+}
+
+message AudioStreamChunk {
+  string session_id = 1;
+  int32 sequence_id = 2;
+  bytes audio_data = 3;
+  // Metadatos opcionales por chunk (ej. cambio de orador implícito)
+  string speaker_id = 4;
+}
+
+message ProcessResult {
+  string block_id = 1;
+  int32 sequence_id = 2;
+  astra.shared.v1.ProcessingStatus status = 3;
+  string intent_detected = 4;
+  string error_message = 5;
+}
+
+message ContextUpdateReq {
+  string session_id = 1;
+  string current_speaker_id = 2;
+  string topic = 3;
+  bool is_restricted = 4;
+}
+
+message FinalizeReq {
+  string session_id = 1;
+}
+
+message FinalizeResp {
+  string download_url = 1;
+  string integrity_hash = 2;
+  string status = 3;
+}

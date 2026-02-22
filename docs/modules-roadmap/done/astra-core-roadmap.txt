@@ -1,0 +1,161 @@
+# Roadmap de Ejecución: Fase 2 - ASTRA CORE (Implementation & Logic)
+
+## 1. Meta / Objetivo de la Fase
+Materializar el "Cerebro" de la plataforma (ASTRA-CORE). El objetivo es construir el pipeline de procesamiento semántico que transforme audio crudo o texto en **intenciones estructuradas** y **datos normalizados**. Dado el requerimiento de agilidad y la nota del usuario, se priorizará una arquitectura híbrida: uso de **APIs SaaS para ASR** (transcripción) en esta fase para reducir complejidad de infraestructura (GPU), manteniendo la lógica de NLP (Embeddings/Clasificación) *in-house* para control de privacidad y costes.
+
+## 2. Suposiciones Iniciales
+1.  **ASR Estratégico:** Se utilizará la API de OpenAI (Whisper) o Azure Speech-to-Text inicialmente para la transcripción, abstraída tras una interfaz para permitir el cambio a *Self-Hosted* en el futuro sin refactorizar.
+2.  **Infraestructura Compartida:** La base de datos vectorial (Qdrant) ya está desplegada (por la fase de Infra/Ingest) y es accesible.
+3.  **Modelos Locales CPU-Friendly:** Los modelos de Embeddings (Sentence-Transformers) y Puntuación se ejecutarán en versiones cuantizadas (ONNX) para funcionar eficientemente en CPU, evitando dependencia estricta de GPU para el MVP.
+4.  **Contexto:** El `Shared Kernel` (definido en Fase 1) ya provee los esquemas de datos `ContextSchema` y `ProcessingResult`.
+
+## 3. Análisis de Impacto
+*   **Costos Operativos:** Cambio de CAPEX (GPUs propias) a OPEX (Costo por minuto de audio API). Se requiere monitoreo de uso.
+*   **Latencia:** Se introduce latencia de red en el paso de ASR. El time-budget de <300ms se relaja a <1.5s para el procesamiento total en modo API.
+*   **Privacidad:** Los datos de audio salen del perímetro para transcripción. Se debe configurar la API con políticas de "Zero Data Retention" si es posible.
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+**[COR-01]** [X]
+- **Título:** Scaffolding del Servicio y Capa de Abstracción ASR
+- **Descripción:** Inicializar proyecto Python (FastAPI). Implementar patrón *Strategy* para el motor ASR. Definir interfaz `ASRProvider` con método `transcribe(audio_bytes) -> text`. Implementar driver concreto para `OpenAIWhisperAPI` (u otra API elegida).
+- **Dónde:** `/services/astra-core/src/asr`
+- **Owner sugerido:** Backend Lead (Python)
+- **Prioridad:** P0
+- **Estimación:** 12 horas
+- **Dependencias:** GEN-01 (Shared Kernel)
+- **Entregables:** Servicio levantado, Endpoint `/health`, Interfaz ASR, Driver API.
+- **Criterios de Éxito (DoD):** Unit test con mock de API pasa. Envío de audio a clase `OpenAIWhisperProvider` retorna texto.
+- **Tests requeridos:** Unit, Integration (con credenciales sandbox).
+- **Riesgos:** Timeout en llamadas API externas.
+
+**[COR-02]** [X]
+- **Título:** Pipeline de Normalización y Limpieza (The Sanitizer)
+- **Descripción:** Implementar motor de Regex y librería `clean-text`. Lógica para eliminar muletillas configurables (lista negra), normalizar espacios y expansión básica de contracciones. **Nota (OPCIONAL):** El micro-modelo de puntuación adicional se considera opcional si el motor ASR ya provee puntuación de alta fidelidad.
+- **Dónde:** `/services/astra-core/src/nlp/cleaner.py`
+- **Owner sugerido:** Python Developer
+- **Prioridad:** P1
+- **Estimación:** 8 horas
+- **Dependencias:** COR-01
+- **Entregables:** Módulo funcional de limpieza.
+- **Criterios de Éxito (DoD):** Input: "eh... hola pa todos" -> Output: "hola para todos".
+- **Tests requeridos:** Unit tests con batería de casos de borde (strings vacíos, unicode).
+- **Riesgos:** Regex demasiado agresivos que borren contenido útil.
+
+**[COR-03]** [X]
+- **Título:** Integración Vectorial y Generación de Embeddings
+- **Descripción:** Integrar modelo `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` (versión ONNX/Quantized). Implementar cliente de conexión a Qdrant. Lógica para convertir texto limpio a vector denso.
+- **Dónde:** `/services/astra-core/src/nlp/embeddings.py`
+- **Owner sugerido:** ML Engineer
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** COR-01
+- **Entregables:** Clase `EmbeddingService`.
+- **Criterios de Éxito (DoD):** Texto -> Vector (768 dim). Latencia < 100ms en CPU.
+- **Tests requeridos:** Performance test (batch processing).
+- **Riesgos:** Alto consumo de RAM al cargar el modelo.
+
+**[COR-04]** [X]
+- **Título:** Motor de Clasificación de Intención y Lógica Híbrida
+- **Descripción:** Implementar lógica de decisión. 1. **Búsqueda Semántica Filtrada (Ruta 15/16):** Consulta a Qdrant (K-NN) utilizando obligatoriamente el `tenant_id` como filtro de metadatos estricto para evitar colisiones entre municipios (Multitenancy Leak Prevention). 2. Si `score > threshold`, asignar `PLANTILLA` y recuperar `template_id`. 3. **Lógica Híbrida:** Calcular distancia Levenshtein. 4. Si no hay match, marcar como `ESTILO_LIBRE`. **Structured Data Storage (Auditoría v2.1):** Para bloques de tipo `DYNAMIC_TABLE`, el CORE debe generar un JSON estructurado que incluya los campos del modelo detectado. El Orquestador almacenará esta estructura en Redis, garantizando que el Builder reciba datos tipados para la inyección en celdas de Word.
+- **Prioridad:** P0
+
+**[COR-05.1]** [X]
+- **Título:** Gobernanza de Recursos, Prioridad y Failover (QoS)
+- **Descripción:** Implementar lógica de resiliencia operativa. **Priorización (Nivel 5 - Ruta 3):** Los requests marcados como `LIVE_SESSION` deben entrar en una **Cola de Prioridad Crítica** en la GPU/Inferencia, desalojando trabajos de `INGEST_BATCH`. **Graceful Degradation (Ruta 3: AI Failure):** Si el proveedor externo (OpenAI) devuelve un Error 429 o hay falla de internet, el Core debe realizar un **Failover automático a un modelo Whisper Local** (GPU secundaria o CPU). Si el failover también falla, debe retornar un estado de error específico que el Orquestador mapeará como `AUDIO_PENDING` para preservación legal.
+- **Dónde:** `/services/astra-core/src/logic/scheduler.py`
+- **Prioridad:** P1
+- **Estimación:** 20 horas
+- **Tests requeridos:** Integration test con Mock de Qdrant.
+- **Riesgos:** Falsos positivos. Se requiere un umbral (threshold) calibrable por variables de entorno.
+
+**[COR-05]** [X]
+- **Título:** Inyección de Contexto y Entidades (Post-Processing)
+- **Descripción:** Implementar el reemplazo de entidades basado en el `context.entities_dictionary`. Lógica de búsqueda y reemplazo inteligente (preservando capitalización) sobre el texto clasificado.
+- **Dónde:** `/services/astra-core/src/logic/enricher.py`
+- **Owner sugerido:** Python Developer
+- **Prioridad:** P1
+- **Estimación:** 8 horas
+- **Dependencias:** COR-02
+- **Entregables:** Módulo Enricher.
+- **Criterios de Éxito (DoD):** Diccionario `{"Jhon": "John"}` aplicado a "Jhon vota si" resulta en "John vota si".
+- **Tests requeridos:** Unit tests.
+- **Riesgos:** Reemplazos parciales no deseados (ej. "Ana" reemplazando dentro de "Banana"). Usar boundaries `\b` en regex.
+
+**[COR-06]** [X]
+- **Título:** Controlador Principal y Orquestación del Pipeline
+- **Descripción:** Implementar el endpoint `POST /v1/process`. Recibir `client_timezone` en el payload para asegurar la normalización temporal correcta. Conectar: ASR -> Cleaner -> Embedder -> Classifier -> Enricher. Ensamblar el JSON de respuesta final según contrato. Manejo de errores y logging estructurado.
+- **Dónde:** `/services/astra-core/src/main.py`
+- **Owner sugerido:** Backend Lead
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** COR-01, COR-02, COR-03, COR-04, COR-05
+- **Entregables:** API completa funcional.
+- **Criterios de Éxito (DoD):** Request E2E retorna status 200 y estructura JSON válida.
+- **Tests requeridos:** Integration tests (API level).
+- **Riesgos:** "Spaghetti code" en el controlador. Usar patrón Chain of Responsibility o Pipeline explícito.
+
+**[COR-07]** [X]
+- **Título:** Extracción de Datos Estructurados (NER Ligero)
+- **Descripción:** Implementar lógica para extracción simple basada en reglas o Few-Shot Learning (vía API LLM si flag activo) para intenciones tipo `DYNAMIC_TABLE`. Ejemplo: extraer "Concejal" y "Voto" de una frase de votación. **Crítico:** La respuesta debe incluir el `table_id` (o el ID del placeholder) para que el Orquestador sepa en qué tabla del Skeleton debe inyectarse el array de datos.
+- **Dónde:** `/services/astra-core/src/logic/extractor.py`
+- **Owner sugerido:** ML Engineer
+- **Prioridad:** P2 (MVP feature limitada)
+- **Estimación:** 16 horas
+- **Dependencias:** COR-06
+- **Entregables:** Módulo extractor capaz de llenar `structured_data`.
+- **Criterios de Éxito (DoD):** Frase de votación estandarizada se convierte en Array JSON.
+- **Tests requeridos:** Unit tests con frases variadas.
+- **Riesgos:** Alta variabilidad en el habla humana. Implementar fallback a texto plano si falla la estructura.
+
+**[COR-08]** [X]
+- **Título:** Dockerización y Optimización de Imagen
+- **Descripción:** Crear `Dockerfile` optimizado. Instalar dependencias de ML (Torch cpu-only, onnxruntime) separadas para minimizar tamaño. Configurar Gunicorn/Uvicorn para producción.
+- **Dónde:** `/services/astra-core/Dockerfile`
+- **Owner sugerido:** DevOps
+- **Prioridad:** P1
+- **Estimación:** 6 horas
+- **Dependencias:** COR-06
+- **Entregables:** Imagen Docker buildable y ejecutable.
+- **Criterios de Éxito (DoD):** Imagen < 2GB (idealmente). Startup time < 10s.
+- **Tests requeridos:** Container scanning (vulnerabilidades).
+- **Riesgos:** Dependencias conflictivas entre librerías de Audio y ML.
+
+**[COR-09]**
+- **Título:** Pre-fetching y Caché Proactiva (Hot-Reload de Modelos/Adaptadores)
+- **Descripción:** Implementar un **Listener de Redis** que escuche los eventos `MODEL_PROMOTED` o `MODEL_UPDATED` de ASTRA-LEARN. **Crítico (Auditoría v2.1):** El evento `TEMPLATE_DISCOVERED` emitido por CORE es una señal de configuración que debe ser consumida por el **Tenant Config Service**, no por CORE, para mantener la arquitectura limpia. Cuando CORE detecta una señal de nuevo modelo, debe disparar la descarga inmediata de adaptadores LoRA y la recarga en caliente (**Hot-Reload**) de los diccionarios de entidades (`entities_dictionary`) por demanda. Esto garantiza que las correcciones del usuario (Active Learning) se apliquen de forma instantánea sin reiniciar servicios.
+- **Dónde:** `/services/astra-core/src/infra/cache.py`
+- **Prioridad:** P1
+- **Estimación:** 12 horas
+- **Entregables:** Manager de caché con listener de eventos y lógica de recarga dinámica.
+
+---
+
+## 5. Directivas de Calidad
+1.  **Abstracción de IA:** Prohibido instanciar modelos de ML directamente en los controladores de API. Usar *Singletons* o inyección de dependencias para cargar modelos una sola vez al inicio (`startup_event`).
+2.  **Manejo de API Keys:** Las credenciales de OpenAI/Azure deben inyectarse vía Variables de Entorno, nunca hardcoded.
+3.  **Fail-Safe ASR:** Si la API externa falla (5xx), el servicio debe retornar un error explícito `503 Service Unavailable` (upstream error) en lugar de crashear, permitiendo al Orquestador reintentar.
+4.  **Logging de Privacidad:** NUNCA loguear el texto transcrito completo ni el audio en los logs de aplicación, solo metadatos (`length`, `confidence`, `intent_type`).
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| ID | Riesgo | Probabilidad | Impacto | Mitigación |
+|----|--------|--------------|---------|------------|
+| R1 | **Latencia API:** La API de ASR tarda > 5s en responder. | Media | Alto | Implementar timeouts estrictos (3s) y, a futuro, cambiar a self-hosted Whisper si la latencia es inaceptable. |
+| R2 | **Cold Start:** El clasificador no funciona porque Qdrant está vacío. | Alta | Bloqueante | Crear un script `seed_qdrant.py` con 50 plantillas base genéricas para pruebas. |
+| R3 | **Costos API:** Uso descontrolado de tokens/minutos en desarrollo. | Baja | Medio | Usar mocks para tests unitarios/integración. Solo usar API real en E2E o QA manual. |
+| R4 | **RAM Exhaustion:** Modelos de embeddings saturan la memoria del contenedor. | Media | Alto | Usar `quantized` models (int8) y limitar workers de Gunicorn. |
+
+## 7. Checklist de Aceptación (DoD Global)
+- [ ] El servicio levanta en Docker sin errores de dependencias.
+- [ ] Endpoint `/v1/process` acepta audio simulado y retorna JSON.
+- [ ] La integración con OpenAI (o proveedor elegido) funciona con credenciales válidas.
+- [ ] La clasificación distingue entre "Ruido/Texto Libre" y "Plantilla" (usando datos seed).
+- [ ] El tiempo de respuesta total para un audio de 10s es menor a 2s (excluyendo latencia de red de la API ASR).
+- [ ] No se exponen datos PII en los logs.
+
+## 8. Export CSV
+
+`NO`

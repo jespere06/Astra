@@ -1,0 +1,330 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-CORE**, diseñada para un equipo de ingeniería de software especializado en IA/ML.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-CORE (El Cerebro)
+
+## 1. Resumen Ejecutivo
+ASTRA-CORE es el motor de orquestación semántica de la plataforma. Su función es ingerir datos crudos (audio o texto), normalizarlos lingüísticamente mediante micro-modelos, clasificar la intención del discurso (Plantilla rígida vs. Estilo libre) y aplicar transformaciones de estilo (Formalización) según la configuración del cliente. Actúa como el filtro determinista y probabilístico antes de la construcción del documento final.
+
+## 2. Objetivos del Módulo
+1.  **Normalización Lingüística:** Convertir transcripciones orales "sucias" en texto gramaticalmente correcto (puntuación, capitalización) con latencia < 200ms por frase.
+2.  **Clasificación de Intención:** Determinar si un fragmento corresponde a una estructura fija (ej. "Llamado a lista") o contenido libre con una precisión > 92%.
+3.  **Adaptación de Estilo:** Transformar lenguaje coloquial en formal automáticamente cuando el modo `formal` o `hybrid` esté activo.
+4.  **Enriquecimiento Contextual:** Integrar metadatos de entidades (nombres, cargos) en el flujo del texto procesado.
+
+## 3. Entradas (Formatos y Ejemplos)
+
+### Formatos Soportados
+*   **Audio:** WAV/FLAC/MP3/OGG (16kHz mínimo, Mono preferido). Tamaño máx por chunk síncrono: 5MB (~2 min).
+*   **Texto:** String UTF-8 plano o JSON con segmentos pre-transcritos.
+*   **Contexto:** Objeto JSON con metadatos de la sesión y entidades conocidas.
+*   **Flags:** Booleanos de configuración (`prefer_formal`, `force_template`, `allow_hybrid`, `language_hint`).
+
+### Ejemplo de Entrada (`input_payload.json`)
+
+```json
+{
+  "request_id": "req_12345abc",
+  "audio_ref": "s3://bucket-temp/chunk_04.wav",
+  "text_raw": null, 
+  "context": {
+    "tenant_id": "CONCEJO_BOG",
+    "session_type": "ORDINARIA",
+    "current_speaker_id": "SPK_01",
+    "entities": [
+      { "id": "SPK_01", "name": "Juan Pérez", "role": "PRESIDENTE" },
+      { "id": "SPK_02", "name": "María Gómez", "role": "SECRETARIA" }
+    ],
+    "previous_intent": "APERTURA",
+    "adapter_id": "adapter_cali_v2",
+    "entities_dictionary": {
+      "Jhon": "John",
+      "Concejal Perez": "Honorable Concejal Pérez"
+    }
+  },
+  "flags": {
+    "prefer_formal": true,
+    "enable_punctuation_model": true,
+    "force_template": false,
+    "allow_hybrid": true,
+    "language_hint": "es-CO"
+  }
+}
+```
+
+## 4. Salidas (Formatos y Ejemplos)
+
+El módulo devuelve un objeto enriquecido con el texto procesado, la decisión de clasificación y los metadatos de transformación.
+
+### Ejemplo de Salida (`output_payload.json`)
+
+```json
+{
+  "request_id": "req_12345abc",
+  "status": "success",
+  "processed_at": "2023-10-27T10:00:01Z",
+  "result": {
+    "cleaned_text": "Señor Secretario, sírvase llamar a lista para verificar el quórum.",
+    "structured_data": [
+      { "nombre": "Juan Pérez", "estado": "PRESENTE" },
+      { "nombre": "María Gómez", "estado": "PRESENTE" }
+    ],
+    "audio_metadata": {
+      "time_start": "00:00:10.500",
+      "time_end": "00:00:25.200",
+      "chunk_id": "chunk_04"
+    },
+    "original_transcription": "eh señor secretario sirvase llamar a lista pa verificar el quorum",
+    "micro_scores": {
+      "fluency": 0.95,
+      "grammar": 0.98,
+      "confidence": 0.91
+    },
+    "intent": {
+      "type": "PLANTILLA",
+      "label": "LLAMADO_LISTA",
+      "template_id": "TPL_LISTA_CALI_V1",
+      "confidence": 0.98,
+      "fallback": false
+    },
+    "mode_applied": "formal",
+    "transformations": [
+      { "type": "filler_removal", "original": "eh", "position": 0 },
+      { "type": "contraction_expansion", "original": "pa", "new": "para" },
+      { "type": "punctuation_restoration", "details": "Added period at end" }
+    ]
+  }
+}
+```
+
+## 5. Pipeline de Procesamiento
+
+1.  **Ingesta & Validación:** Decodificación del payload y validación de esquema.
+2.  **ASR (Automatic Speech Recognition):** *[Si hay audio]* Transcripción audio-a-texto usando modelo Whisper optimizado.
+3.  **Sanitización (Cleaner):** Eliminación de muletillas, expansión de contracciones básicas (regex) y normalización Unicode.
+4.  **Restauración de Puntuación:** Aplicación de micro-modelo (BERT-based) para insertar comas, puntos y signos de interrogación.
+5.  **Extracción de Embeddings:** Vectorización del texto limpio usando Sentence-Transformers.
+6.  **Clasificación de Intención:** El vector pasa por un clasificador (Head Layer) para decidir: `PLANTILLA`, `ESTILO_LIBRE` o `HIBRIDO`.
+7.  **Lógica Híbrida / Estilo:**
+    *   Si es `PLANTILLA`: Se busca el match exacto en la base de conocimiento (Vector DB).
+    *   Si es `ESTILO_LIBRE`: Se aplica formateo según flags (preservar vs. formalizar).
+    *   Si es `HIBRIDO`: Se aplica "Style Transfer" ligero (T5/Llama-small) para elevar el registro.
+8.  **Post-Procesamiento:** Inyección de entidades (Reemplazar "yo" por "EL PRESIDENTE" si aplica) y formateo final.
+
+## 6. Especificaciones Técnicas por Componente
+
+### A. ASR (Componente de Audio)
+*   **Modelo:** **OpenAI Whisper (Modelo `turbo` o `small`)** ejecutado sobre **CTranslate2** o **Faster-Whisper**.
+*   **Criterio:** Balance óptimo entre precisión en español y latencia (<300ms por chunk de 10s).
+*   **Configuración:** `beam_size=1`, `temperature=0`, `language=es`.
+*   **Diarización:** Se asume que la diarización viene pre-resuelta o se usa **Pyannote** como paso previo fuera de este núcleo para no elevar latencia.
+
+### B. Normalizador / Cleaner
+*   **Tecnología:** Regex + Librería `clean-text` de Python.
+*   **Reglas:**
+    *   Eliminación de *fillers* comunes ("eh", "este...", "mmm").
+    *   Normalización de espacios y saltos de línea.
+    *   Expansión de coloquialismos ("pal" -> "para el").
+
+### C. Micro-model de Puntuación (Opcional)
+*   **Arquitectura:** **DeepMultilingualPunctuation** (basado en XLM-RoBERTa) u ONNX Runtime optimizado.
+*   **Propósito:** Convertir "hola juan como estas" -> "Hola, Juan. ¿Cómo estás?".
+*   **Optimizacion:** Este componente es **Opcional**. Puede ser activado/desactivado mediante el flag `enable_punctuation_model`. Si el motor ASR de terceros ya provee puntuación aceptable, se desactiva para reducir latencia.
+*   **Métrica Objetivo:** F1-Score > 0.85 en restauración de puntos y comas.
+
+### D. Diccionario de Entidades (Hotfixes)
+*   **Propósito:** Aplicar correcciones instantáneas de "Buscar y Reemplazar" de alta prioridad antes de cualquier otro procesamiento.
+*   **Uso:** Ideal para corregir nombres mal transcritos detectados por `LEARN` en sesiones previas sin esperar al re-entrenamiento del modelo.
+*   **Ejecución:** Se aplica sobre el texto crudo del ASR.
+
+*   **Embeddings:** `all-MiniLM-L6-v2` (rápido, ligero, multilingüe).
+*   **Algoritmo:** Capa Lineal (Logistic Regression) o MLP simple entrenada sobre el dataset de plantillas de ASTRA-INGEST.
+*   **Mapeo de IDs:** La búsqueda en la Vector DB **debe** devolver el `template_id` asociado a la intención detectada para que el Orquestador pueda instruir al Builder correctamente.
+*   **Etiquetas:**
+    *   `PLANTILLA`: Alta similitud con frases canónicas.
+    *   `ESTILO_LIBRE`: Narrativa, debate.
+    *   `HIBRIDO`: Mezcla (ej. una moción explicada con palabras propias).
+*   **Manejo de Baja Confianza:** Si `confidence < 0.65`, marcar como `UNK` (Unknown) para revisión humana o fallback a texto plano.
+
+### E. Lógica Híbrida (Formalizador)
+*   **Enfoque:** Sistema híbrido Reglas + Small Language Model (SLM).
+*   **Reglas Determinísticas:** Diccionario de reemplazo (`slang_dict.json`)
+### B. Adaptador de Estilo (Formalizador)
+*   **Modelo de Estilo:** T5-Base fine-tuned en el dataset "Parafrasis Formal" (HuggingFace) o inferencia a un LLM cuantizado (Llama-3-8B-Instruct 4-bit) si hay GPU disponible.
+*   **Pureza de Contenido:** El Formalizador tiene prohibido inyectar etiquetas de formato visual (ej. Markdown, negritas, cursivas o tags XML). Debe retornar **Texto Plano Puro**.
+*   **Prompt implícito:** "Reescribe el siguiente texto en un registro formal administrativo manteniendo el significado y devolviendo únicamente texto sin formato."
+
+### G. Extractor de Entidades Estructurado (NER)
+*   **Función:** Para intenciones tipo `LISTA` o `VOTACION`, el núcleo activa un paso de post-procesamiento.
+*   **Tecnología:** Uso de un LLM ligero (SLM) o reglas basadas en gramática para extraer pares clave-valor (ej. Concejal/Voto) y devolver un Array JSON.
+*   **Objetivo:** Permitir que el Orchestrator pase datos estructurados al Builder para el llenado de tablas dinámicas.
+
+### H. Dynamic Adapter Loading & Timestamps
+*   **Adaptadores:** El servicio carga en tiempo de ejecución el `adapter_id` específico (LoRA) indicado en el contexto de la petición.
+*   **Timestamps:** El output debe incluir `time_start` y `time_end` (relativos al inicio del audio) para cada bloque procesado, garantizando la trazabilidad audio-texto.
+
+### F. Orquestación y Tolerancia a Fallos
+*   **Timeouts:** 5s estricto para todo el pipeline de texto; 10s para audio corto.
+*   **Fallback:** Si ASR falla, error 400. Si Puntuación falla, devolver texto `clean`. Si Clasificación falla, devolver `ESTILO_LIBRE`.
+
+### G. Dynamic Index Reloader
+*   **Función:** Suscribirse al evento `TEMPLATE_DISCOVERED` emitido por **ASTRA-INGEST**.
+*   **Acción:** Gatillar una recarga asíncrona del índice vectorial en memoria o refrescar la conexión con Qdrant para incluir los nuevos vectores de plantillas sin necesidad de reiniciar el servicio.
+
+## 7. Contratos API / Interfaces Internas
+
+### `POST /v1/core/process`
+Procesa un fragmento de información.
+
+**Firma:**
+```typescript
+function process(input: {
+  audio_b64?: string; // Opcional, chunks pequeños
+  audio_url?: string; // Opcional, pre-signed URL
+  text?: string;      // Opcional, si ya hay transcripción
+  context: ContextSchema;
+  flags: FlagsSchema;
+}) -> ProcessingResult
+```
+
+**Códigos de Estado:**
+*   `200 OK`: Procesamiento exitoso.
+*   `422 Unprocessable Entity`: Audio corrupto o formato inválido.
+*   `500 Internal Server Error`: Fallo en modelos de inferencia.
+
+## 8. Criterios de Aceptación y Métricas
+1.  **WER (Word Error Rate) ASR:** < 8% en español neutro (dataset CommonVoice).
+2.  **Latencia p95:**
+    *   Texto puro: ≤ 1.2s
+    *   Audio (30s): ≤ 3.5s (con aceleración GPU T4/A10).
+3.  **Clasificación de Intención:** Precisión > 90% en dataset de validación de actas municipales.
+4.  **Escalabilidad:** Soportar 50 requests concurrentes por pod (con batching dinámico en ASR).
+
+## 9. Manejo de Errores y Casos Límite
+*   **Audio Silencioso/Ruido:** ASR retorna string vacío. Pipeline debe detectar `len(text) < umbral` y devolver status `SKIPPED`.
+*   **Idioma Mixto/Inglés:** Whisper detecta idioma. Si `detected_language != 'es'`, activar flag `warning: language_mismatch` y procesar "best effort" o detener según configuración.
+*   **Texto Ambiguo:** Si el Intent Classifier tiene entropía alta (ej. 0.5 Plantilla / 0.5 Libre), priorizar `ESTILO_LIBRE` para no romper el flujo, pero añadir flag `review_suggested: true`.
+
+## 10. Seguridad y Privacidad
+*   **PII Masking:** Uso de **Microsoft Presidio** (versión ligera) para detectar DNI, Teléfonos y Emails en el texto antes de loguear.
+*   **Logs:** No se guarda el audio crudo en logs de aplicación, solo metadatos y `request_id`.
+*   **Anonimización:** El `context.json` en logs debe ofuscar nombres reales (`Juan Pérez` -> `PERSON_1`).
+
+## 11. Pruebas y Validación
+*   **Unitarias:** Validar regex de limpieza, probar inputs vacíos/nulos.
+*   **Integración:** Enviar archivo WAV conocido, validar que el JSON de salida contenga las claves correctas y el texto transcrito coincida >95%.
+*   **Dataset de Evaluación:** "Corpus ASTRA": 500 fragmentos de audio de sesiones de concejo reales (con ruido, interrupciones) etiquetados manualmente con su intención y texto ideal.
+
+## 12. Entregables y Artefactos
+1.  **Imagen Docker:** `astra-core:v1.0` (incluyendo modelos o scripts de descarga).
+2.  **Definición OpenAPI (Swagger):** `openapi.yaml`.
+3.  **Modelos Serializados:** `intent_classifier.onnx`, `punctuation.onnx`.
+4.  **Script de Benchmark:** Python script para medir latencia y WER localmente.
+5.  **Config Maps K8s:** Valores por defecto para despliegue (CPU/RAM requests).
+
+## 13. Diagrama de Componentes (Flujo)
+
+```text
+[Cliente/API] 
+    | (JSON/Audio)
+    v
+[Ingesta & Validación] --> (Error 4xx)
+    |
+    +--> [ASR Engine (Whisper)] (Si Audio)
+    |       | (Raw Text)
+    |       v
+    +--> [Sanitizer & Regex]
+            | (Clean Text)
+            v
+         [Micro-Model Puntuación (BERT)]
+            | (Punctuated Text)
+            v
+         [Embedding Generator] --> [Vector DB Cache]
+            | (Vector)
+            v
+         [Intent Classifier (Logistic Reg)]
+            | (Label: PLANTILLA / LIBRE / HIBRIDO)
+            v
+         [Hybrid Logic Switch]
+          /       |        \
+     (Match)  (Format)  (Style Transfer LLM)
+        \         |        /
+         v        v       v
+         [Post-Processing & Entity Injection]
+                  |
+                  v
+             [JSON Output]
+```
+
+## 14. Suposiciones
+1.  El módulo se despliega en un entorno con acceso a GPU (NVIDIA T4 o similar) para cumplir los SLAs de audio.
+2.  La base de datos vectorial para búsqueda de plantillas está disponible y poblada por `ASTRA-INGEST`. **Infraestructura Compartida:** Se utiliza una única instancia de Qdrant y un servicio de embeddings unificado (`paraphrase-multilingual-mpnet-base-v2`) para CORE e INGEST.
+3.  El idioma predominante es Español (variantes LATAM/ES).
+
+## 15. Riesgos y Mitigaciones
+*   **Riesgo:** Alucinaciones en el modelo de Estilo (Hybrid).
+    *   *Mitigación:* Usar temperatura baja (0.1) y restringir el modelo de reescritura a cambios gramaticales, no de contenido.
+*   **Riesgo:** Sobrecarga por audios largos.
+    *   *Mitigación:* La API rechazará síncronamente audios > 2 minutos. Deben ser troceados por el orquestador superior.
+
+## 16. Plan de Evolución
+1.  **Iteración 1:** Implementación base con Whisper y Regex. Clasificador simple.
+2.  **Iteración 2:** Fine-tuning del modelo de Puntuación con datos legales/administrativos específicos.
+3.  **Iteración 3:** Implementación de "Speaker Adaptation" (el ASR aprende vocabulario específico del orador basado en el historial).
+
+---
+
+## Anexo: Contrato de Integración (JSON Summary)
+
+```json
+{
+  "module": "ASTRA-CORE",
+  "version": "1.0.0",
+  "inputs": {
+    "payload_schema": {
+      "audio_b64": "string (base64) | null",
+      "text": "string | null",
+      "context": {
+        "tenant_id": "string",
+        "entities": [{ "name": "string", "role": "string" }]
+      },
+      "flags": {
+        "prefer_formal": "boolean",
+        "language_hint": "string (ISO-639-1)"
+      }
+    }
+  },
+  "outputs": {
+    "response_schema": {
+      "cleaned_text": "string",
+      "intent": {
+        "type": "string (PLANTILLA|ESTILO_LIBRE|HIBRIDO)",
+        "label": "string",
+        "template_id": "string (ID físico para el Builder)",
+        "confidence": "float (0.0-1.0)"
+      },
+      "structured_data": "array | null",
+      "audio_metadata": {
+        "time_start": "string",
+        "time_end": "string",
+        "chunk_id": "string"
+      },
+      "transformations": ["string"],
+      "processing_time_ms": "integer"
+    },
+    "events_subscribed": [
+      { "event": "TEMPLATE_DISCOVERED", "action": "reload_vector_index" }
+    ]
+  },
+  "endpoints": {
+    "process_sync": {
+      "method": "POST",
+      "path": "/v1/process",
+      "description": "Procesamiento síncrono para textos o audios cortos (<30s)"
+    }
+  }
+}
+```
+
+[AUNQUE PODEMOS USAR UNA API DE AUDIO PARA LA TRANSCRIPCION]

@@ -1,0 +1,212 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-LEARN**, diseñada para ingenieros de ML, arquitectos de software y especialistas en MLOps.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-LEARN (El Evolutivo)
+
+## 1. Resumen Ejecutivo
+ASTRA-LEARN es el módulo de retroalimentación de la plataforma encargado de cerrar el ciclo de aprendizaje (Active Learning Loop). Su función es identificar discrepancias entre los documentos generados por el sistema y las versiones finales editadas por humanos para realizar un refinamiento (Fine-tuning ligero) de los clasificadores y modelos de estilo, garantizando una personalización continua por cliente (tenant) sin degradar el rendimiento global.
+
+## 2. Objetivos del Módulo
+1.  **Cuantificación del Error:** Medir con precisión la distancia semántica y estructural entre la propuesta de ASTRA y el resultado final aprobado.
+2.  **Generación de Datos de "Oro":** Curar automáticamente datasets de entrenamiento basados en correcciones humanas validadas.
+3.  **Generación de Datasets:** Acumular ejemplos alineados para el re-entrenamiento (Fine-tuning) periódico de los modelos LoRA.
+4.  **Feedback Inmediato (Hotfixes):** Detectar discrepancias simples en entidades (nombres, fechas) y actualizar el **Entities Dictionary** del tenant para aplicación inmediata en CORE sin esperar al re-entrenamiento.
+5.  **Refinamiento Localizado:** Ejecutar procesos de entrenamiento ligeros (PEFT/LoRA) para adaptar la inteligencia del sistema a las idiosincrasias de cada alcaldía o concejo.
+6.  **Gobernanza de Modelos:** Asegurar que cada actualización de modelo sea superior a la anterior mediante pruebas de regresión y despliegues controlados.
+
+## 3. Entradas (Formatos y Ejemplos)
+
+### Paquetes de Comparación
+*   **IDs de Versión:** Referencias cruzadas a `ASTRA-CORE` (generado) y el archivo final subido (aprobado).
+*   **Artefactos:** JSON de la predicción original (logs de CORE) + XML del DOCX final (deserializado).
+
+### Ejemplo de Input: `compareVersions`
+```json
+{
+  "comparison_id": "comp_abc_123",
+  "generated_artifact": {
+    "version_id": "gen_v1.0.4",
+    "intent_prediction": "PLANTILLA_APROBACION",
+    "text_content": "Se aprueba el acta número 05 por unanimidad."
+  },
+  "final_artifact": {
+    "source_id": "user_upload_789.docx",
+    "text_content": "Se aprueba por unanimidad el acta número 05 de la sesión ordinaria."
+  },
+  "metadata": {
+    "tenant_id": "CONCEJO_MEDELLIN",
+    "user_feedback_tag": "minor_edits"
+  }
+}
+```
+
+## 4. Salidas (Formatos y Ejemplos)
+
+### Reporte de Diferencias (Delta)
+*   **Métricas:** BERTScore (similitud semántica), WER (Word Error Rate), Estructural (XML tags diff).
+
+### Ejemplo de Dataset JSONL (Para Fine-tuning)
+```jsonl
+{"instruction": "Formalizar acta", "context": "Sesión Ordinaria 05", "input": "Se aprueba el acta número 05 por unanimidad.", "output": "Se aprueba por unanimidad el acta número 05 de la sesión ordinaria."}
+{"instruction": "Clasificar intención", "input": "Se procede a llamar a lista", "intent_label": "LLAMADO_LISTA"}
+```
+
+### Ejemplo de Salida: `fineTuneModel`
+```json
+{
+  "job_id": "ft_job_5566",
+  "base_model": "astra-core-v1",
+  "new_adapter_id": "adapter_medellin_v2",
+  "metrics_post_ft": {
+    "accuracy_gain": "+2.4%",
+    "perplexity": 1.12,
+    "f1_intent": 0.94
+  },
+  "status": "VALIDATED_FOR_CANARY"
+}
+```
+
+## 5. Pipeline de Procesamiento
+
+1.  **Ingesta & Alineación:** Recolección del par (Generado, Final). Alineación de párrafos mediante algoritmos de *Needleman-Wunsch* o similitud de embeddings.
+2.  **Cálculo de Diffs:** Identificación de inserciones, borrados y sustituciones.
+3.  **Agrupación de Errores:** Clasificación del cambio: ¿Fue un cambio de intención?, ¿Fue un cambio de estilo formal?, ¿Fue un error de datos?
+4.  **Dataset Builder:** Si el cambio es significativo y validado, se formatea como par (Input -> Label) y se añade al buffer de entrenamiento del cliente.
+5.  **Fine-tuning (Trigger):** Al alcanzar un umbral (ej. 500 nuevos ejemplos), se dispara un Job de entrenamiento ligero.
+6.  **Validación A/B:** El nuevo modelo se evalúa contra un "Hold-out set" histórico para asegurar que no hay regresión.
+7.  **Despliegue Canary:** Se publica el adaptador (LoRA) para el 5% del tráfico de ese cliente específico.
+8.  **Monitorización:** Si las métricas de edición humana bajan (éxito), se promociona al 100%.
+
+## 6. Especificaciones Técnicas por Componente
+
+### A. Comparator Engine
+*   **Procedimiento:**
+    1.  Descarga el DOCX generado (`generated_id`) y el DOCX final subido por el usuario.
+    2.  Llama al servicio interno **ASTRA-INGEST: /parse** para ambos archivos para obtener los árboles XML normalizados.
+    3.  Ejecuta un algoritmo de Diffing semántico (basado en `DeepDiff`) sobre el contenido de texto.
+*   **Deriva Estructural:** El comparador analiza si el orden de los bloques XML ha cambiado consistentemente entre el "Generado" y el "Final". Si la desviación estructural es persistente, emite el evento `STRUCTURAL_DRIFT_DETECTED`.
+
+### B. Estrategias de Fine-tuning Ligero
+*   **Técnica:** **LoRA (Low-Rank Adaptation)** usando la librería `PEFT` (Hugging Face). 
+*   **Ventaja:** Permite guardar solo ~10MB de pesos por cliente en lugar de 2GB del modelo completo.
+*   **Configuración:** `r=8`, `alpha=16`, target_modules=["q_proj", "v_proj"].
+*   **Hardware:** Entrenamiento en Jobs de Kubernetes con acceso a GPU (NVIDIA L4 o T4).
+
+### C. Model Deployment & Config Propagation
+*   **Acción:** Una vez que el Job asíncrono termina el re-entrenamiento:
+    1.  Sube los pesos del adaptador (LoRA) a S3.
+    2.  Registra el nuevo `adapter_id` en el Model Registry.
+    3.  **Config Propagation:** Llama al **Tenant Config Service** (webhook) para actualizar la versión por defecto del modelo para este tenant, permitiendo que el Orchestrator la use instantáneamente en la siguiente sesión.
+*   **Tecnología:** **MLflow** o **W&B** (Weights & Biases).
+*   **Almacenamiento:** Los adaptadores LoRA se guardan en S3 con una estructura `models/{tenant_id}/{version}/`.
+
+### D. Generador de Datasets
+*   **Deduplicación:** Evitar entrenar con frases idénticas repetitivas.
+*   **Anonimización:** Integración con `Microsoft Presidio` para detectar y enmascarar nombres/DNI en los ejemplos de entrenamiento antes de guardarlos en el Model Registry.
+
+## 7. Contratos API / Interfaces Internas
+
+### `compareVersions(generatedId, finalId)`
+*   **Firma:** `(string, string) -> JSONReport`
+*   **Propósito:** Generar métricas de discrepancia inmediatamente tras la edición del usuario.
+
+### `fineTuneModel(datasetId, baseModelId, params)`
+*   **Firma:** `(string, string, dict) -> JobSummary`
+*   **Job asíncrono:** Emite evento `LEARN_TRAINING_COMPLETED`.
+
+### `promoteModel(modelId, strategy)`
+*   **Firma:** `(string, string) -> DeploymentInfo`
+*   **Integración:** Actualiza la configuración de inferencia en `ASTRA-CORE`.
+
+## 8. Criterios de Aceptación y Métricas
+1.  **Mejora de Precisión:** El nuevo modelo debe reducir el WER (Word Error Rate) del siguiente documento generado en al menos un 5%.
+2.  **No-Regresión:** La precisión en el set de validación global de la plataforma no debe bajar más de un 0.2%.
+3.  **Velocidad:** El Job de fine-tune para 500 muestras no debe exceder los 15 minutos en una GPU T4.
+
+## 9. Manejo de Errores y Casos Límite
+*   **Pocos Datos:** Si el cliente tiene < 50 ejemplos, el sistema se mantiene en "Modo Recolección" y no entrena.
+*   **Cambio Semántico Radical:** Si la similitud coseno entre versiones es < 0.4, el par se marca como "Inconsistente" y se envía a revisión manual (posible error humano o cambio de contexto drástico).
+*   **Overfitting:** Si el Loss de validación sube mientras el de entrenamiento baja, se aplica *Early Stopping* y se descarta el Job.
+
+## 10. Seguridad y Privacidad
+*   **Aislamiento de Pesos:** Los pesos entrenados con datos de la Alcaldía A **nunca** se cargan en la inferencia de la Alcaldía B.
+*   **Encriptación:** Los datasets de entrenamiento están cifrados con llaves únicas por cliente (KMS).
+
+## 11. Pruebas y Validación
+*   **Test Unitario:** Verificar que el calculador de diffs detecta correctamente una inserción de palabra.
+*   **Test de Integración:** Flujo completo desde la subida del DOCX final hasta la creación de un nuevo registro en MLflow.
+*   **Evaluación Humana:** Panel de expertos revisa ciegamente (A/B) 50 párrafos: "¿Cuál es más formal?". Target: > 70% preferencia por el nuevo modelo.
+
+## 12. Entregables y Artefactos
+1.  **Dockerfile del Trainer:** Imagen optimizada con PyTorch y PEFT.
+2.  **Pipeline de CI/CD:** Definición de GitHub Actions / GitLab CI para validación de modelos.
+3.  **Dashboard de Monitoreo:** Panel en Grafana/Streamlit para ver la evolución del F1-Score por cliente.
+
+## 13. Diagrama de Componentes (ASCII)
+
+```
+[DOCX Generado] + [DOCX Final]
+       |
+       v
+[Normalizer/Aligner] 
+       |
+[Comparator Engine] ------> [Reporte de Diffs (Log)]
+       |
+[Dataset Builder] --------> [DB Datasets (JSONL)]
+       |
+[Trainer (LoRA/GPU)] <----- [Model Registry (Weights)]
+       |
+[Validation Service] -----> [Canary Deployer]
+       |                      |
+[Model Monitor] <---------- [Producción (CORE)]
+```
+
+## 14. Suposiciones
+1.  Los documentos finales cargados por los usuarios son la "Verdad Absoluta" (Ground Truth).
+2.  El volumen de documentos por cliente es suficiente para fine-tuning (al menos 5 actas al mes).
+3.  El acceso a GPUs en el cluster de Kubernetes está garantizado mediante *Resource Quotas*.
+
+## 15. Riesgos y Mitigaciones
+*   **Riesgo:** Olvido catastrófico (el modelo olvida cómo saludar por aprender a cerrar actas).
+    *   **Mitigación:** Incluir una porción de datos genéricos (base) en cada Job de fine-tuning (Replay Buffer).
+*   **Riesgo:** Datos de mala calidad (usuario subió un documento equivocado).
+    *   **Mitigación:** Filtro de calidad basado en umbrales mínimos de similitud antes de añadir al dataset.
+
+## 16. Plan de Evolución
+1.  **V1:** Fine-tuning offline programado (cada fin de semana).
+2.  **V2:** **Active Learning**: El sistema pide al usuario revisar específicamente párrafos donde la confianza es baja.
+3.  **V3:** **Streaming Learning**: Actualización de pesos casi en tiempo real tras cada aprobación de documento (on-the-fly).
+
+---
+
+## Anexo: Contrato de Integración Mínimo (JSON)
+
+```json
+{
+  "module": "ASTRA-LEARN",
+  "version": "1.0.0",
+  "endpoints": {
+    "compare": {
+      "method": "POST",
+      "uri": "/v1/compare",
+      "input": { "generated_id": "uuid", "final_id": "uuid" },
+      "output": { "report_id": "uuid", "metrics": "object" }
+    },
+    "train": {
+      "method": "POST",
+      "uri": "/v1/finetune",
+      "input": { "tenant_id": "string", "dataset_id": "uuid" },
+      "output": { "job_id": "string", "model_uri": "s3://..." }
+    }
+  },
+  "libraries": [
+    "transformers==4.35.0",
+    "peft==0.6.0",
+    "pytorch==2.1.0"
+  ],
+  "events_emitted": [
+    { "event": "STRUCTURAL_DRIFT_DETECTED", "payload": { "tenant_id": "string", "drift_details": "object" } }
+  ]
+}
+```

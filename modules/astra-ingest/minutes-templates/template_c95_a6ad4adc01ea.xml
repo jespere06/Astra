@@ -1,0 +1,63 @@
+<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+    xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+    xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
+    xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types"
+    xmlns:v="urn:schemas-microsoft-com:vml"
+    xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <w:sdt>
+        <w:sdtPr>
+            <w:alias w:val="VAR_1" />
+            <w:tag w:val="VAR_1" />
+        </w:sdtPr>
+        <w:sdtContent>
+            <w:r>
+                <w:t>{{ VAR_1 }}</w:t>
+            </w:r>
+        </w:sdtContent>
+    </w:sdt>
+    <w:r>
+        <w:t xml:space="preserve">honorable concejal </w:t>
+    </w:r>
+    <w:sdt>
+        <w:sdtPr>
+            <w:alias w:val="VAR_2" />
+            <w:tag w:val="VAR_2" />
+        </w:sdtPr>
+        <w:sdtContent>
+            <w:r>
+                <w:t>{{ VAR_2 }}</w:t>
+            </w:r>
+        </w:sdtContent>
+    </w:sdt>
+    <w:r>
+        <w:t xml:space="preserve">del Partido </w:t>
+    </w:r>
+    <w:sdt>
+        <w:sdtPr>
+            <w:alias w:val="VAR_3" />
+            <w:tag w:val="VAR_3" />
+        </w:sdtPr>
+        <w:sdtContent>
+            <w:r>
+                <w:t>{{ VAR_3 }}</w:t>
+            </w:r>
+        </w:sdtContent>
+    </w:sdt>
+    <w:r>
+        <w:t xml:space="preserve">y ponente del Proyecto de Acuerdo N°. 005 de enero 2 de 2024, “POR MEDIO DEL CUAL SE DICTAN UNAS DISPOSICIONES PARA PROTEGER LOS DERECHOS DE LOS NIÑOS, NIÑAS Y ADOLESCENTES EN ENTORNOS ESCOLARES, PARQUES Y OTROS ESPACIOS PÚBLICOS DE LA CIUDAD DE MANIZALES”, </w:t>
+    </w:r>
+    <w:sdt>
+        <w:sdtPr>
+            <w:alias w:val="VAR_4" />
+            <w:tag w:val="VAR_4" />
+        </w:sdtPr>
+        <w:sdtContent>
+            <w:r>
+                <w:t>{{ VAR_4 }}</w:t>
+            </w:r>
+        </w:sdtContent>
+    </w:sdt>
+</w:p>

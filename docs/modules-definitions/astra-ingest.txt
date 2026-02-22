@@ -1,0 +1,246 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-INGEST**, diseñada para un equipo de ingeniería de software.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-INGEST
+
+## 1. Resumen Ejecutivo
+ASTRA-INGEST es el motor ETL (Extracción, Transformación y Carga) y de aprendizaje no supervisado de la plataforma. Su función es ingerir lotes masivos de documentos históricos (formato DOCX), deconstruirlos en sus componentes atómicos (XML, estilos, imágenes) y utilizar técnicas de NLP y Hashing para generar una "Biblioteca de Conocimiento" (Skeletons, Sub-plantillas y Activos) que alimentará al motor de generación.
+
+## 2. Objetivos del Módulo
+1.  **Atomización de Documentos:** Descomprimir y separar contenido, estilos y binarios de archivos `.docx` (OOXML).
+2.  **Deduplicación de Activos:** Identificar y almacenar imágenes únicas (logos, firmas) mediante hashing perceptual.
+3.  **Inferencia de Estructura (Skeleton):** Abstraer la arquitectura base de los documentos (encabezado, cuerpo, pie) ignorando el contenido variable.
+4.  **Descubrimiento de Patrones (Clustering):** Agrupar párrafos semánticamente similares para crear sub-plantillas reutilizables (ej. "Bloque de Aprobación").
+5.  **Normalización de Estilos:** Crear un diccionario que mapee estilos arbitrarios de clientes (ej. "MiTitulo1") a estilos canónicos de ASTRA (ej. "HEADING_1").
+
+## 3. Entradas (Formatos y Ejemplos)
+*   **Formato Principal:** Archivos `application/vnd.openxmlformats-officedocument.wordprocessingml.document` (.docx).
+*   **Estructura Interna Esperada:**
+    *   `word/document.xml`: Contenido y estructura.
+    *   `word/styles.xml`: Definiciones de formato.
+    *   `word/_rels/`: Relaciones (vínculos a imágenes).
+    *   `word/media/`: Archivos binarios de imagen.
+*   **Metadatos de Entrada:** JSON con `tenant_id`, `doc_type` (opcional), `date`.
+
+**Ejemplo de Entrada (Texto plano representativo de un DOCX):**
+> *ACTA 001 - CONCEJO MUNICIPAL*
+> *Siendo las 10:00 AM se inicia la sesión...*
+> *ORDEN DEL DÍA:*
+> *1. Llamado a lista.*
+> *2. Aprobación del acta anterior.*
+> *[Imagen del Escudo]*
+
+## 4. Salidas (Formatos y Ejemplos)
+
+### A. Skeleton (JSON + XML)
+Estructura vacía que define el flujo del documento.
+```json
+{
+  "skeleton_id": "SKEL_ACTA_STD_V1",
+  "tenant_id": "ALCALDIA_A",
+  "sections": [
+    { "id": "header", "xml_ref": "header1.xml" },
+    { "id": "body", "blocks": ["TITLE_BLOCK", "AGENDA_BLOCK", "CLOSING_BLOCK"] },
+    { "id": "footer", "xml_ref": "footer1.xml" }
+  ]
+}
+```
+
+### B. Sub-plantilla XML
+Fragmento XML generalizado con *slots* para inyección de datos.
+```xml
+<!-- Sub-template ID: TPL_APROBACION_ACTA -->
+<w:p>
+  <w:r>
+    <w:t>Se somete a consideración el acta número </w:t>
+  </w:r>
+  <w:sdt>
+    <w:sdtPr><w:tag w:val="NUMERO_ACTA"/></w:sdtPr>
+    <w:sdtContent><w:t>{NUMERO}</w:t></w:sdtContent>
+  </w:sdt>
+  <w:r>
+    <w:t>, la cual es aprobada por unanimidad.</w:t>
+  </w:r>
+</w:p>
+```
+
+### C. Diccionario de Estilos (JSON)
+```json
+{
+  "tenant_id": "ALCALDIA_A",
+  "mappings": [
+    { "raw_style": "Titulo 1 Car", "astra_style": "HEADING_1" },
+    { "raw_style": "Normal Web", "astra_style": "BODY_TEXT" }
+  ]
+}
+```
+
+## 5. Pipeline de Procesamiento
+
+1.  **Ingesta & Validación:** Recepción del zip/blob, validación de integridad OOXML y escaneo antivirus.
+2.  **Unzipping & Parsing:** Extracción de componentes internos (`document.xml`, `styles.xml`, carpeta `media`).
+3.  **Procesamiento de Imágenes (Media):**
+    *   Generación de hash perceptual (pHash).
+    *   Consulta a `AssetLibrary`. Si existe (distancia de Hamming baja), se reutiliza ID. Si no, se guarda.
+4.  **Análisis de Estilos:** Extracción de `w:style` y mapeo contra un diccionario base. Si es nuevo, se marca para revisión o se infiere por propiedades (tamaño de fuente, negrita).
+5.  **Segmentación Estructural:** División del `document.xml` en bloques lógicos basados en cambios de estilo mayores (ej. salto de Título a Párrafo).
+6.  **Vectorización & Clustering (NLP):**
+    *   Limpieza de texto de los bloques (quitar nombres/fechas con NER básico).
+    *   Generación de embeddings.
+    *   Clustering (HDBSCAN) para encontrar bloques repetitivos (ej. "Llamado a lista").
+7.  **Generalización (Template Induction):** Para cada cluster denso, se alinean las secuencias, se detectan variables y se genera la Sub-plantilla XML con *slots*.
+8.  **Generación de Skeletons:** Crear archivos `.docx` de referencia con los placeholders inyectados.
+9.  **Construcción del Skeleton:** Se guarda la secuencia de IDs de sub-plantillas que conforman el documento original.
+10. **Notificación de Cambio:** Emisión del evento `TEMPLATE_DISCOVERED` para sincronizar con **ASTRA-CORE**.
+11. **Persistencia:** Guardado en bases de datos (Vectorial, Relacional, Object Storage).
+
+## 6. Especificaciones Técnicas por Componente
+
+### A. Parser DOCX
+*   **Librería Principal:** `lxml` (Python) o `quick-xml` (Rust). **No usar** `python-docx` para la extracción final, ya que abstrae demasiado el XML y necesitamos fidelidad nativa.
+*   **Responsabilidad:** Leer el árbol XML, preservar `w:rPr` (propiedades de run) y `w:pPr` (propiedades de párrafo). Detectar tablas (`w:tbl`) como unidades atómicas.
+
+### B. Motor de Análisis XML
+*   **Lógica:** Debe ser capaz de "tokenizar" el XML no solo por palabras, sino por nodos.
+*   **Validación:** XSD Schema validation (OpenXML schemas) para asegurar que las sub-plantillas generadas sean válidas.
+
+### C. Hashing de Imágenes
+*   **Algoritmo:** **pHash (Perceptual Hash)**.
+*   **Justificación:** Tolera recompresión, cambios de formato (PNG a JPG) y redimensionamiento leve. MD5/SHA256 es demasiado estricto.
+*   **Contexto de Uso:** Este paso es crítico para tenants con alto volumen de activos (ej. fotos de evidencia). Para tenants de bajo volumen (solo logos municipales), el pHash puede ser omitido o reemplazado por almacenamiento directo para reducir la carga computacional.
+*   **Librería:** `ImageHash` (Python).
+
+### D. Módulo NLP y Clustering
+*   **Embeddings:** `paraphrase-multilingual-mpnet-base-v2` (Sentence-Transformers). Optimizado para similitud semántica en español.
+*   **Clustering:** **HDBSCAN**. Permite encontrar clusters de densidad variable y clasifica el ruido (documentos únicos) automáticamente.
+*   **NER (Reconocimiento de Entidades):** `Spacy` (modelo `es_core_news_lg`) para detectar nombres y fechas antes de clusterizar, mejorando la detección de la estructura fija.
+
+### E. Almacenamiento
+*   **Vectores:** Qdrant (Filtrado por `tenant_id`).
+*   **Metadatos/Relacional:** PostgreSQL.
+*   **Binarios:** MinIO / S3.
+
+## 7. Contratos API / Interfaces Internas
+
+### `POST /ingest/batch`
+Inicia el proceso de aprendizaje.
+*   **Input:** Lista de URLs (S3 presigned) de archivos DOCX, `tenant_id`.
+*   **Output:** `job_id`.
+
+### `GET /v1/ingest/status/{job_id}`
+Retorna el progreso del procesamiento por lotes.
+
+### `POST /v1/ingest/parse`
+**Internal Shared Service.** Analiza un DOCX y devuelve su estructura lógica.
+**Input:** `multipart/form-data` (file).
+**Output:** `xml_tree`, `json_content`, `media_references`.
+
+### `Function: extract_skeleton(xml_tree) -> SkeletonObj`
+Firma interna para el worker de procesamiento.
+
+## 8. Criterios de Aceptación y Métricas
+*   **Precisión de Mapeo de Estilos:** >90% de los estilos detectados deben mapearse automáticamente a categorías base (Heading, Body, List).
+*   **Deduplicación de Imágenes:** >95% de imágenes idénticas visualmente deben tener el mismo Asset ID.
+*   **Rendimiento:** Procesamiento de 1,000 documentos en < 1 hora (instancia GPU T4 o equivalente).
+*   **Calidad de Clustering:** Cohesión de clusters (Silhouette Score) > 0.6 para sub-plantillas aceptadas automáticamente.
+
+## 9. Manejo de Errores y Casos Límite
+*   **DOCX Corrupto:** El pipeline debe atrapar `zipfile.BadZipFile` y registrar el error sin detener el lote completo.
+*   **Imágenes OLE/EMF:** Formatos legacy de Windows dentro de Word. Convertir a PNG usando `ImageMagick` o descartar con *warning*.
+*   **Idiomas Mixtos:** Si se detecta <50% español en un párrafo, marcar como `NON_STD_CONTENT` y no usar para aprendizaje de plantillas.
+
+## 10. Seguridad y Privacidad
+*   **PII (Información Personal):** El módulo de generalización debe reemplazar Nombres Propios detectados por NER con tokens `{PERSONA}` en las sub-plantillas almacenadas. No se guardan nombres reales en la capa de plantillas.
+*   **Aislamiento:** Los vectores y estilos de un `tenant_id` nunca deben influir en el clustering de otro inquilino.
+
+## 11. Pruebas y Validación
+*   **Unitarias:** Parsing de XMLs con estructuras anidadas complejas. Cálculo de pHash.
+*   **Integración:** Flujo completo: DOCX -> Skeleton en DB.
+*   **Dataset "Golden":** 100 actas municipales variadas etiquetadas manualmente para medir la precisión del clustering.
+
+## 12. Entregables y Artefactos
+1.  **Código Fuente:** Python/Rust en repositorio Git.
+2.  **Esquemas:** JSON Schema para `Skeleton` y `StyleDictionary`.
+3.  **Scripts de Migración:** SQL para crear tablas en Postgres.
+4.  **Docker Compose:** Entorno local con MinIO, Qdrant y Postgres.
+5.  **Reporte de Análisis:** Notebook de Jupyter mostrando la distribución de clusters del dataset de prueba.
+
+## 13. Diagrama de Componentes (Texto)
+
+```
+[DOCX Files] --> (Ingest Worker)
+                      |
+        +-------------+-------------+
+        |             |             |
+   (Unzipper)    (Style Analyzer) (Media Extractor)
+        |             |             |
+   [XML Parser]  [Style Dict]    [pHash Gen]
+        |             |             |
+   (Text Cleaner)     +---------> [Asset DB]
+        |
+   (Embedding Model)
+        |
+   (HDBSCAN Clustering)
+        |
+   (Template Inducer)
+        |
+   [Vector DB] + [Relational DB]
+```
+
+## 14. Suposiciones
+1.  Los documentos históricos siguen un estándar OOXML (Word 2007 en adelante).
+2.  Existe conectividad de red suficiente para descargar los lotes de documentos.
+3.  Los documentos pertenecen predominantemente a un dominio administrativo/legal.
+
+## 15. Riesgos y Mitigaciones
+*   **Riesgo:** Alta variabilidad en documentos "sucios" (mal formateados manualmente).
+    *   *Mitigación:* Implementar un umbral de "confianza de estructura". Si el documento es muy caótico, se descarta del set de aprendizaje.
+*   **Riesgo:** Falsos positivos en deduplicación de imágenes (hash colisiona).
+    *   *Mitigación:* Usar pHash con un umbral de distancia de Hamming conservador (ej. < 5).
+
+## 16. Plan de Evolución
+1.  **Iteración 1:** Extracción basada en reglas y hashing de imágenes exacto.
+2.  **Iteración 2:** Implementación de Embeddings + HDBSCAN y pHash.
+3.  **Iteración 3:** Interfaz gráfica para que humanos validen/corrijan clusters y nombres de estilos ("Active Learning").
+
+---
+
+## Anexo: Contrato de Integración (JSON)
+
+```json
+{
+  "module": "ASTRA-INGEST",
+  "version": "1.0.0",
+  "inputs": {
+    "file_batch": {
+      "type": "array",
+      "items": {
+        "url": "s3://bucket/path/doc.docx",
+        "metadata": { "tenant_id": "string", "doc_date": "ISO8601" }
+      }
+    },
+    "configuration": {
+      "clustering_sensitivity": 0.5,
+      "force_reprocess": false
+    }
+  },
+  "outputs": {
+    "processing_report": {
+      "total_docs": "integer",
+      "successful": "integer",
+      "failed": "integer",
+      "new_templates_found": "integer"
+    },
+    "artifacts": {
+      "skeleton_table": "db_skeletons",
+      "template_vector_collection": "qdrant_templates",
+      "assets_bucket": "s3_assets"
+    },
+    "events_emitted": [
+      { "event": "TEMPLATE_DISCOVERED", "payload": { "tenant_id": "string", "collection": "string" } }
+    ]
+  },
+  "main_entrypoint": "def run_ingest_pipeline(batch_config: Dict) -> JobResult"
+}
+```

@@ -1,0 +1,111 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-ORCHESTRATOR**, el "Director de Orquesta" del sistema ASTRA.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-ORCHESTRATOR (El Conductor)
+
+## 1. Resumen Ejecutivo
+ASTRA-ORCHESTRATOR es el corazón operativo de la plataforma. Su función es coordinar el flujo de datos entre los módulos (CORE, BUILDER, GUARD, LEARN), gestionar el estado de las sesiones de grabación en vivo y actuar como el único punto de entrada (API Gateway) para las aplicaciones cliente. Resuelve el desacoplamiento entre la inteligencia probabilística y la construcción de documentos inmutables.
+
+## 2. Objetivos del Módulo
+1.  **Gestión de Workflow:** Orquestar llamadas secuenciales y condicionales a otros microservicios.
+2.  **Manejo de Sesión (Statefulness):** Mantener un buffer temporal de los fragmentos de una sesión larga antes de generar el documento final.
+3.  **Traducción de Datos:** Transformar la salida semántica de `CORE` al formato requerido por `BUILDER` y adjuntar el `style_map` y el `placeholder_map` del tenant.
+4.  **Resiliencia:** Gestionar reintentos (retries) y fallbacks entre los módulos.
+5.  **Asset Stewardship:** Actuar como puente de carga para archivos multimedia (imágenes) que no pasan por el pipeline de NLP.
+6.  **Version Pinning:** Congelar la versión del esqueleto y de los modelos (LoRA) al inicio de la sesión para garantizar consistencia estructural.
+
+## 3. Arquitectura del Conductor
+*   **Tecnología:** Node.js (Fastify) o Python (FastAPI).
+*   **Persistence:** **Redis** (para el Session Buffer y caché de estado).
+*   **Workflow Engine:** (Opcional) Temporal.io o AWS Step Functions para procesos asíncronos complejos.
+
+## 4. El "Session Buffer" (Accumulator)
+Debido a que una sesión puede durar horas y enviarse en chunks, el Orchestrator utiliza Redis para acumular los bloques.
+
+**Estructura del Buffer en Redis (`session:{session_id}`):**
+```json
+{
+  "tenant_id": "CONCEJO_CALI",
+  "skeleton_id": "SKEL_STD_V1",
+  "adapter_id": "adapter_cali_v2",
+  "style_map": { "Estilo_Cali": "HEADING_1", "Firma_Presidente": "SIGNATURE_BLOCK" },
+  "placeholder_map": { "TPL_APERTURA": "HEADER_ZONE", "TPL_DEBATE": "ZONE_DEBATE" },
+  "entities_dictionary": { "Jhon": "John" },
+  "blocks": [
+    { 
+      "type": "TEMPLATE", 
+      "template_id": "TPL_APERTURA", 
+      "data": { "FECHA": "..." },
+      "audio_metadata": { "time_start": "...", "time_end": "..." }
+    },
+    { "type": "DYNAMIC_ZONE", "zone_id": "ZONE_DEBATE", "blocks": [...] }
+  ],
+  "status": "OPEN",
+  "created_at": "..."
+}
+```
+
+## 5. Pipeline de Orquestación (Flujo Típico)
+
+1.  **Inicio de Sesión:** El cliente llama a `POST /session/start`. El Orquestador consulta el **Model Registry** y el **Tenant Config Service** para obtener el `adapter_id`, el `entities_dictionary`, el `style_map`, el `placeholder_map` y la versión vigente del `skeleton_id`. **Pinning:** Estos valores se guardan en el estado de la sesión en Redis y no cambian hasta el cierre.
+2.  **Procesamiento de Chunk:**
+    *   Cliente envía audio a `POST /session/{id}/chunk`.
+    *   Orquestador llama a **ASTRA-CORE**, pasando el `adapter_id` y el `entities_dictionary` en el contexto.
+    *   Orquestador recibe `intent`, `label`, `template_id`, `structured_data` (opcional) y `audio_metadata`.
+    *   Orquestador consulta el `placeholder_map` para asignar un `target_placeholder` al bloque antes de guardarlo.
+    *   Orquestador guarda el fragmento (incluyendo metadata de trazabilidad y ruteo) en el **Session Buffer**.
+3.  **Gestión de Activos:**
+    *   Cliente sube imagen a `POST /session/{id}/upload-asset`.
+    *   Orquestador sube el archivo a S3, obtiene la URL y guarda un bloque tipo `IMAGE` en Redis con el placeholder correspondiente.
+4.  **Cierre y Construcción:**
+    *   Cliente llama a `POST /session/{id}/finalize`.
+    *   Orquestador recupera *todos* los bloques, el `style_map` y la configuración fijada de Redis.
+    *   Orquestador llama a **ASTRA-BUILDER** con la carga completa + el mapa de estilos.
+    *   Orquestador recibe el binario y lo pasa a **ASTRA-GUARD**.
+    *   Orquestador devuelve la URL final y el reporte de auditoría al cliente.
+
+## 6. Contratos API (External Facing)
+
+### `POST /v1/orchestrator/session/start`
+**Input:** `tenant_id`, `skeleton_id`, `metadata`.
+**Output:** `session_id`.
+
+### `POST /v1/orchestrator/session/{id}/append`
+Inyecta datos (audio o texto) en una sesión activa.
+**Input:** `audio_chunk` (b64) | `text`.
+
+### `POST /v1/orchestrator/session/{id}/upload-asset`
+Sube una imagen o archivo adjunto a la sesión.
+**Input:** `multipart/form-data` (file).
+**Output:** `asset_id`, `s3_url`.
+
+### `POST /v1/orchestrator/session/{id}/finalize`
+Dispara la generación del documento.
+**Output:** `download_url`, `integrity_hash`, `audit_report`.
+
+## 7. Mapeo de Identidades
+El Orchestrator es el responsable de la tabla de equivalencias si CORE no la provee, pero según la Fase 2, CORE ahora devuelve el `template_id`. El Orchestrator simplemente actúa como transportador de esta información hacia el Builder.
+
+## 8. Manejo de Errores
+*   **Fallo en CORE:** El Orquestador reintenta la transcripción. Si persiste, guarda el chunk como "ERROR_PENDING_REVIEW" para que el Builder inserte un comentario.
+*   **Fallo en BUILDER:** No se llama a GUARD. Se notifica al cliente error de generación.
+
+## 9. Seguridad
+*   **Auth:** Valida tokens JWT antes de delegar a módulos internos.
+*   **Aislamiento:** Asegura que una sesión de `Tenant A` no pueda acceder a datos o plantillas de `Tenant B`.
+
+## 10. Diagrama de Flujo (Lógica de Pegamento)
+```mermaid
+graph LR
+    User[Cliente App] -- 1. Audio Chunk --> Orch[ASTRA-ORCHESTRATOR]
+    Orch -- 2. Process --> Core[ASTRA-CORE]
+    Core -- 3. Intent + TemplateID --> Orch
+    Orch -- 4. Store --> Redis[(Session Buffer)]
+    User -- 5. Finalize --> Orch
+    Redis -- 6. Pull All Blocks --> Orch
+    Orch -- 7. Build DOCX --> Builder[ASTRA-BUILDER]
+    Builder -- 8. Doc Binary --> Guard[ASTRA-GUARD]
+    Guard -- 9. Hash + Storage --> Orch
+    Orch -- 10. Final URL --> User
+```

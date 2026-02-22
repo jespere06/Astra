@@ -1,0 +1,23 @@
+{
+    "job_id": "75721e92-1bc2-4d63-b9f4-887068683ba7-u2",
+    "tenant_id": "concejo_manizales",
+    "timestamp_started": "20260222_174633",
+    "output_s3_key": "training/adapters/concejo_manizales/20260222_174633/adapter.zip",
+    "payload": {
+        "dataset_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260222_174633/train.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=7c12ef04d0662c4d8354ca6b8b460bf31cd134b9012469c370efb93639ef6233",
+        "validation_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260222_174633/val.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=7379d224ced4ddecb042b83d5de770612616c601732624d37b859f24a178b0ee",
+        "upload_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/adapters/concejo_manizales/20260222_174633/adapter.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=e895251a12212d71eadf684daa7ab9fbaabe4c92fc10f798c33f21b559a9d3e9",
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": 0.0002,
+            "max_seq_length": 2048,
+            "batch_size": 2
+        }
+    },
+    "status": "CANCELLED",
+    "timestamp_finished": "2026-02-22T17:48:21.093122",
+    "error": {
+        "id": "75721e92-1bc2-4d63-b9f4-887068683ba7-u2",
+        "status": "CANCELLED"
+    }
+}

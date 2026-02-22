@@ -1,0 +1,12 @@
+{
+  "name": "@astra/shared-kernel",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "./scripts/build-contracts.sh"
+  },
+  "devDependencies": {
+    "ts-proto": "^1.166.0",
+    "typescript": "^5.3.3",
+    "google-protobuf": "^3.21.2"
+  }
+}

@@ -1,0 +1,153 @@
+================================================================================
+📊 REPORTE DE CALIDAD DE ALINEACIÓN ASTRA (INVERSA)
+Fecha: 2026-02-20T13:45:01.484363
+================================================================================
+
+1. METADATOS DE EJECUCIÓN
+   - Duración: 14.29 s
+   - Total XML: 123
+   - Total Audio: 94
+   - Umbral: 0.35
+
+2. RESUMEN DE COBERTURA
+   - ✅ Pares Encontrados: 19
+   - 📈 Cobertura XML: 15.4%
+   - 📈 Cobertura Audio: 100.0%
+
+3. MUESTRA DE PARES (Top 20)
+================================================================================
+
+🔹 PAREJA #1 [Score: 0.6661]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 0]: Dirección territorial de salud de Canda. Sean todos bienvenidos a una audiencia pública más de este honorable cuerpo colegiado, al doctor David Gómez, secretario de educación, su grupo [Speaker 1]: de [Speaker 0]: colaboradores. Honorable concejal Álvarez Moreno Duverney presente. Honor...
+   OUTPUT (XML Target):
+   Daza Cuartas Juano...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #2 [Score: 0.7631]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Por favor, señora secretaria, leerle la orden del día. [Speaker 0]: Orden del día para la sesión ordinaria de hoy martes, 16 de enero, siendo las 9 am. Primero, verificación del quorum, segundo, Íno Manizales. Tercero, socialización de las condiciones y atenciones en salud mental del de...
+   OUTPUT (XML Target):
+   Anunciando que había quórum para deliberar y decidir; y procedió a dar lectura al orden del día, en acatamiento al artículo 79 del Acuerdo N°. 0997 del 17 de agosto de 2018 - Reglamento Interno del Concejo de Manizales....
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #3 [Score: 0.7991]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: En consideración el orden del día, se abre la discusión, anuncio que se va a cerrar, queda cerrado, ¿prueba de la plenaria? [Speaker 0]: Ha sido aprobado por unanimidad el orden del día. [Speaker 2]: Continuemos con el siguiente punto. [Speaker 0]: Segundo himno a Manizales. [Speaker 2]...
+   OUTPUT (XML Target):
+   Finalizada la presentación de la doctora Natalia Castaño Diaz, directora de la Dirección Territorial de Salud de Caldas, el presidente, honorable concejal Luis Gonzalo Valencia González, del Partido Conservador Colombiano, dio paso a las intervenciones de los honorables concejales, para dar cumplimi...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #4 [Score: 0.7548]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 3]: Ya está. Muy buenos días a todos, doctor Luis Gonzalo Valencia González, presidente, Paula Andrea Toro Santana, vicepresidenta, Héctor Fabio Delgado Londoño, vicepresidente, demás honorables concejales, un saludo muy cordial. Mi nombre es Natalia Castaño Díaz, soy la directora territori...
+   OUTPUT (XML Target):
+   A continuación, hizo uso de la palabra la doctora Natalia Castaño Diaz, directora de la Dirección Territorial de Salud de Caldas, saludo afectuosamente a los corporados, medios de comunicación y demás personas presentes, agradeció la invitación, e inicio su intervención proyectando la siguiente pres...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #5 [Score: 0.6188]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: se [Speaker 3]: tuvieron para incrementar el consumo, sobre todo de tranquilizantes, fueron estos 2 problemas importantes. La ansiedad y el estrés, que generaba estar en un mismo sitio y con las mismas personas, y los mismos problemas familiares. Sabemos que en esta etapa, los problemas...
+   OUTPUT (XML Target):
+   Es muy importante conocer este tipo de cifras relacionadas con temas relacionados a la salud mental y otros asociados a estos como los de consumo de sustancias sicoactivas...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #6 [Score: 0.6774]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Doctora, le vamos a dar 5 minutos más, que el tema está muy interesante. Otros 5 minutos, para que [Speaker 3]: Entonces, tenemos dentro de eso, como les decía, los medicamentos, que hay que tener mucho cuidado en nuestras en nuestros hogares para evitar el consumo y la buena utilizació...
+   OUTPUT (XML Target):
+   Preguntó ¿A qué tipo de estrategias le apuesta la Dirección Territorial de Caldas en materia de prevención y atención? ¿Pueden los modelos de atención CAS replicarse en atención de salud mental?...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #7 [Score: 0.6311]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Muy bien, doctora. Tome asiento para que anote las inquietudes, un un esfero para la doctora, ahí para que ella anote las Bien pueda, doctora, ya le van a pasar un esfero. Marcela, un esferito para la doctora. Mire, doctora Por favor, señora secretaria, verificar la asistencia de los co...
+   OUTPUT (XML Target):
+   Seguidamente tomó el uso de la palabra la honorable concejal, Paula Andrea Toro Santana, del Partido Grupo Significativo de Ciudadanos – UNA, saludó afectuosamente los presentes, además mencionó:...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #8 [Score: 0.7004]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Muy bien. A las 9 y 35 minutos se están escritos Carlos Andrés, Andrés Mauricio y Paula Andrea. Contiene el uso de la palabra Carlos Andrés Morales. [Speaker 5]: Buenos días, presidente, a la mesa directiva, a todos los asistentes, a los funcionarios de la Dirección Regional de Salud de...
+   OUTPUT (XML Target):
+   Acto seguido y para una interpelación tomó el uso de la palabra el honorable concejal, María Constanza Montoya Naranjo, del Partido Centro Democrático, saludo a los presentes y expresó:...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #9 [Score: 0.7121]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Continúa con la palabra el concejal Andrés Mauricio. [Speaker 6]: Gracias, presidente, un cordial saludo para usted y para los compañeros de la mesa directiva y compañeros del consejo. Gracias, doctora Natalia, por su presentación, su informe, que nos sigue dando insumos. Ya lo menciona...
+   OUTPUT (XML Target):
+   Para concluir con su intervención retomó el uso de la palabra la honorable concejal, Paula Andrea Toro Santana, del Partido Grupo Significativo de Ciudadanos – UNA, manifestando que esta corporación se encuentra muy interesada en esta situación de afectación en materia de salud mental y la necesidad...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #10 [Score: 0.5693]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 4]: Buenos días a todos, muchas gracias, Andrés, por por la interpelación. Yo yo quiero empezar hablando de algo, y es que, doctora, yo soy estudiante de una maestría en salud pública, y yo soy un convencido que la atención primaria en salud hay que hacerla desde la gente, y hay que hacerla...
+   OUTPUT (XML Target):
+   Se ha venido trabajando con los municipios y las instituciones prestadoras de salud para eliminar las barreras de atención en primeros auxilios sicológicos...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #11 [Score: 0.5683]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Continúa, concejal Mauricio. [Speaker 6]: Gracias, presidente. No, hasta ahí era mi intervención, doctora Natalia, agradecerle, reiterarle el agradecimiento por el informe y las cifras que hoy nos muestra. Le reitero, son un importante insumo de cara a lo que se viene, la aprobación de ...
+   OUTPUT (XML Target):
+   Acto seguido y para una moción de aclaración intervino el honorable concejal, Julián Andrés Julián Andrés Osorio Toro, del Partido En Marcha, manifestó preocupación por las manifestaciones dadas por la ESE Assbasalud y los incumplimientos para poder obtener las certificaciones y gestionar los recurs...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #12 [Score: 0.6630]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Muy bien, continúa doctora Paula con su disposición. [Speaker 7]: Muchas gracias, presidente. Buenos días para usted, para mis compañeras concejalas y compañeros concejales, a la delegada de la personería, a los medios de comunicación, muy buenos días. Bienvenida doctora Natalia, secret...
+   OUTPUT (XML Target):
+   Para continuar con las respuestas retomó el uso de la palabra a la doctora Natalia Castaño Diaz, directora de la Dirección Territorial de Salud de Caldas:...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #13 [Score: 0.6357]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Para una interpelación, ¿consalvo Juan Camilo? [Speaker 8]: Muy buenos días para todos y para todas. 1000 gracias, presidente y doctora Paula, por permitirme la interpelación. Yo quiero hacer unas preguntas con relación a este tema muy específicas, después tendremos la oportunidad de ha...
+   OUTPUT (XML Target):
+   El presidente, honorable concejal, Luis Gonzalo Valencia González, del Partido Conservador Colombiano, agradeció a las funcionarias de la Dirección Territorial de Caldas por la presentación realizada, además llamó la atención para que desde la entidad se fortalezcan las acciones en temas de alto int...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #14 [Score: 0.5400]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Por favor, [Speaker 11]: por favor. Fue la moción, esa fue la moción, presidente. [Speaker 2]: Entonces, doctora, simplemente a contestar, ya se le pidió sobre de pronto, no hay necesidad de responder, sino que pidió por escrito que le hiciera llegar, y lo otro, para que a lo que es de ...
+   OUTPUT (XML Target):
+   Otras respuestas relacionadas con temas presupuestales y de coberturas de atención serán remitidas por escrito...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #15 [Score: 0.6160]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Secretaria, ¿cómo queda la proposición? Invitar, no es citación, citación es cuando es, todo es invitar. Citaciones cuestionario. Debemos leer el reglamento, cada 1 se le entregó con anticipación. Favor, esperemos a verte que, concejal, cómo queda la proposición y con mucho gusto le dam...
+   OUTPUT (XML Target):
+   El honorable concejal Carlos Andrés Morales Vásquez, del Partido Liberal Colombiano, propuso invitar al gerente de Assbasalud para que informe respecto del real avance de los proyectos que requieren de autorización por parte de la Dirección Territorial de Caldas, así como del manejo que se está dand...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #16 [Score: 0.5009]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Esta es una proposición, es una entidad de de de Holanda, ¿cierto? Que es un profesor, una entidad de Holanda, que viene a desarrollar un proyecto en Manizales. Entonces, invitar a la universidad, nosotros tenemos invitar a la universidad nacional y concretamente al profesor. ¿Sería así...
+   OUTPUT (XML Target):
+   Proposición N°. 1:...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #17 [Score: 0.5669]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: No hay sesiones en esa época. [Speaker 7]: ¿No hay sesión? [Speaker 2]: No hay sesiones en esa época. Muy bien. O sea, ellos no pueden venir ahora, o [Speaker 7]: vienen a Manizales en el [Speaker 4]: mes de marzo. [Speaker 2]: Después, cuando estemos en sesiones, pero pero invitamos a ...
+   OUTPUT (XML Target):
+   Agotado el orden del día, siendo las 10:45 a.m., el presidente honorable concejal, Luis Gonzalo Valencia González, del Partido Conservador Colombiano, agradeció a todos los asistentes y levantó la sesión, citando para el día 17 de enero de 2024, a las 7:30 a.m....
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #18 [Score: 0.7034]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Muy bien, después de de la plenaria, sigue Comisión Segunda. Tiene la palabra concejal Mauricio. [Speaker 6]: Gracias, presidente. Yo me sumo, concejal Humberto, a sus palabras, en este punto de varios, del reconocimiento a ese personal de EMAS, que cariñosamente llamamos escobitas, hac...
+   OUTPUT (XML Target):
+   A su turno hizo uso de la palabra el honorable concejal, Julián Andrés Julián Andrés Osorio Toro, del Partido En Marcha, reconociendo el trabajo realizado por el gremio de taxistas quienes prestaron adecuadamente sus servicios a la comunidad. Llamó la atención para que se tomen las acciones pertinen...
+--------------------------------------------------------------------------------
+
+🔹 PAREJA #19 [Score: 0.6735]
+   INPUT (Audio Combined 0 segs):
+   [Speaker 2]: Continuamos con el orden del día de Juano. [Speaker 13]: Gracias, presidente. No, sencillamente, quería agradecer también a Cormanizales por las boletas que nos dieron para ir a toros, a fomento y turismo, y a las instituciones, como ya lo dijeron mis amigos, la policía metropolitana, l...
+   OUTPUT (XML Target):
+   Prosiguió en el uso de la palabra el honorable concejal, Andrés Mauricio Osorio Molina, del Partido Gente en Movimiento, reiteró el reconocimiento al personal de la Empresa Metropolitana de Aseo EMAS por el trabajo de limpieza, además a la Policía Metropolitana de Manizales por su presencia permanen...
+--------------------------------------------------------------------------------
+
+... y -1 pares más.

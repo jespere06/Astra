@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+// Definición de Contratos Compartidos (P0 - GEN-01)
+// Este archivo sirve como la verdad absoluta para todos los microservicios.
+package astra.shared;
+
+// --- MODELOS DE DATOS ---
+
+// Representa un bloque de contenido procesado
+message Block {
+  string id = 1;
+  string tenant_id = 2;
+  string session_id = 3;
+  int64 timestamp_ms = 4;
+  
+  // Contenido
+  string raw_text = 5;
+  string intent = 6;      // EL_INTENT_DETECTADO (ej. "LLAMADO_LISTA")
+  float confidence = 7;
+  
+  // Metadatos estructurales para el Builder
+  map<string, string> metadata = 8; // target_placeholder, style_override, etc.
+  
+  // Fallback (Si el audio no pudo ser procesado)
+  bool is_pending = 9;
+  string audio_url = 10; // URL presignada para escucha manual
+}
+
+// Configuración de Sesión (Lo que se congela al inicio)
+message SessionContext {
+  string session_id = 1;
+  string tenant_id = 2;
+  string skeleton_id = 3;
+  string s3_version_id = 4; // Inmutabilidad física
+  string client_timezone = 5; // Para L10n legal
+  
+  // Mapas de Configuración (Cargados de Tenant Config Service)
+  map<string, string> style_map = 6; // "ASTRA_HEADER" -> "Heading 1"
+  map<string, string> zone_map = 7;  // "TEMPLATE_X" -> "Zone_Body"
+}
+
+// Manifiesto de Integridad (Lo que firma Guard)
+message IntegrityManifest {
+  string integrity_hash = 1;
+  string session_id = 2;
+  string tenant_id = 3;
+  string signature = 4;
+  string timestamp = 5;
+}

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package asset;
+
+service AssetService {
+  // Recibe una imagen binaria y verifica si ya existe mediante pHash
+  rpc CheckDuplicate (CheckReq) returns (CheckResp);
+  
+  // Registra un nuevo asset (usado si CheckDuplicate retorna false)
+  rpc RegisterAsset (RegisterReq) returns (RegisterResp);
+}
+
+message CheckReq {
+  bytes image_data = 1;
+  string tenant_id = 2;
+}
+
+message CheckResp {
+  bool is_duplicate = 1;
+  string asset_id = 2; // UUID si existe, vacío si no
+  double confidence = 3; // 1.0 = idéntico, 0.0 = muy distinto
+}
+
+message RegisterReq {
+  bytes image_data = 1;
+  string tenant_id = 2;
+  string original_filename = 3;
+}
+
+message RegisterResp {
+  string asset_id = 1;
+  string storage_url = 2;
+}

@@ -1,0 +1,49 @@
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
+
+# Set non-interactive timezone
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Update and install basic tools
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3-dev \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink python3 to python
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Install PyTorch consistent with Unsloth requirements (CUDA 12.1)
+RUN pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
+
+# Install Unsloth & Dependencies
+# "colab-new" is often recommended for latest features, or specific tag
+RUN pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+# Install Training & Logging libs
+RUN pip install \
+    transformers \
+    datasets \
+    trl \
+    peft \
+    accelerate \
+    bitsandbytes \
+    wandb \
+    scipy \
+    sentencepiece \
+    protobuf
+
+# Set working directory
+WORKDIR /app
+
+# Copy generic entrypoint if needed
+# COPY entrypoint.sh /app/entrypoint.sh
+# RUN chmod +x /app/entrypoint.sh
+
+# Default command
+CMD ["/bin/bash"]

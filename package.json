@@ -1,0 +1,26 @@
+{
+  "name": "astra-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ASTRA Hybrid Dev Environment - Hot Reload & Native Speed",
+  "scripts": {
+    "infra:up": "docker compose -f docker-compose.infra.yml up -d",
+    "infra:down": "docker compose -f docker-compose.infra.yml down",
+    "infra:logs": "docker compose -f docker-compose.infra.yml logs -f",
+    "setup:python": "chmod +x scripts/setup_local_env.sh && ./scripts/setup_local_env.sh",
+    "setup:js": "pnpm install && cd services/astra-dashboard && pnpm install",
+    "dev:orchestrator": "cd services/astra-orchestrator && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8001 --env-file ../../.env.hybrid",
+    "dev:core": "cd services/astra-core && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8002 --env-file ../../.env.hybrid",
+    "dev:ingest": "cd modules/astra-ingest && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8003 --env-file ../../.env.hybrid",
+    "dev:builder": "cd services/astra-builder && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8004 --env-file ../../.env.hybrid",
+    "dev:guard": "cd services/astra-guard && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8005 --env-file ../../.env.hybrid",
+    "dev:learn": "cd services/astra-learn && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8006 --env-file ../../.env.hybrid",
+    "dev:tenant-config": "cd services/tenant-config-service && ../../venv/bin/python -m uvicorn src.main:app --reload --port 8080 --env-file ../../.env.hybrid",
+    "dev:dashboard": "cd services/astra-dashboard && pnpm dev",
+    "dev": "concurrently -n \"ORCH,CORE,INGEST,BUILDER,GUARD,LEARN,TENANT,DASH\" -c \"blue,magenta,yellow,cyan,red,green,grey,white\" \"npm run dev:orchestrator\" \"npm run dev:core\" \"npm run dev:ingest\" \"npm run dev:builder\" \"npm run dev:guard\" \"npm run dev:learn\" \"npm run dev:tenant-config\" \"npm run dev:dashboard\"",
+    "start": "npm run infra:up && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

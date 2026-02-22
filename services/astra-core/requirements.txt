@@ -1,0 +1,18 @@
+# === Framework Web & Utils ===
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+pydantic>=2.6.0
+pydantic-settings>=2.1.0
+requests>=2.31.0
+httpx>=0.26.0
+click>=8.0.0
+
+# === Cloud AI Drivers (Ligeros) ===
+deepgram-sdk>=5.3.0
+openai>=1.0.0
+qdrant-client>=1.7.0
+
+# === NLP Ligero (Solo texto, sin modelos) ===
+nltk>=3.8.1
+boto3

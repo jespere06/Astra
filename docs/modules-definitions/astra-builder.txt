@@ -1,0 +1,297 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-BUILDER**, diseñada para un equipo de ingeniería de software.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-BUILDER (El Constructor)
+
+## 1. Resumen Ejecutivo
+ASTRA-BUILDER es el motor de ensamblaje de documentos de alta fidelidad de la plataforma. Su función es tomar planos lógicos (Skeletons y Sub-plantillas XML), inyectar datos dinámicos (texto, imágenes, tablas), resolver lógica de presentación (encabezados, paginación) y compilar el resultado en un archivo `.docx` nativo (OOXML) válido, inmutable y auditable. **Naturaleza del Módulo:** Es un procesador de lotes (batch) **sin estado** (stateless). No gestiona la sesión, sino que espera recibir la carga completa de bloques acumulados por el Orquestador.
+
+## 2. Objetivos del Módulo
+1.  **Ensamblaje Nativo:** Construir documentos manipulando directamente la estructura XML de OpenXML, sin depender de motores de renderizado de UI (como Word Interop).
+2.  **Inyección Dinámica:** Soportar la inserción de imágenes, tablas repetitivas y texto con formato preservado.
+3.  **Auditoría y Metadatos:** Inyectar trazas invisibles y comentarios visibles para garantizar la trazabilidad y facilitar la revisión humana.
+4.  **Rendimiento:** Generar documentos estándar (<50 págs) en menos de 2 segundos.
+5.  **Consistencia de Imagen:** Insertar activos multimedia (fotos, firmas, logos) con dimensiones y metadatos OOXML correctos.
+6.  **Normalización de Estilos:** Aplicar el `style_map` del tenant para asegurar que el texto generado por la inteligencia (o texto plano manual) se asiente sobre los estilos físicos correctos del esqueleto (ej. convertir "Nota" en estilo `ASTRA_COMMENT`).
+
+## 3. Entradas (Formatos y Ejemplos)
+
+### Formatos Aceptados
+*   **Blueprint (JSON):** Instrucciones de ensamblaje (orden de secciones, referencias a plantillas).
+*   **Assets:**
+    *   Sub-plantillas: Fragmentos XML (`.xml`).
+    *   Imágenes: `base64` o URLs (S3) de archivos PNG/JPG/JPEG.
+    *   Datos Tabulares: Arrays de objetos JSON.
+*   **Skeleton:** Archivo `.docx` base (vacío de contenido, rico en estilos/encabezados).
+
+### Ejemplo de Entrada (`build_request.json`)
+
+```json
+{
+  "build_id": "bld_998877",
+  "skeleton_ref": "s3://assets/skeletons/ACTA_STD_V2.docx",
+  "content_blocks": [
+    {
+      "type": "TEMPLATE",
+      "template_id": "TPL_ENCABEZADO_V1",
+      "data": { "FECHA": "12 de Octubre, 2023", "NUMERO_ACTA": "045" }
+    },
+    {
+      "type": "DYNAMIC_TABLE",
+      "template_id": "TPL_TABLA_VOTOS",
+      "row_data": [
+        { "CONCEJAL": "Juan Pérez", "VOTO": "POSITIVO" },
+        { "CONCEJAL": "María Gómez", "VOTO": "NEGATIVO" }
+      ]
+    },
+    {
+      "source_url": "s3://uploads/foto1.jpg",
+      "alt_text": "Gráfica de presupuesto"
+    },
+    {
+      "type": "DYNAMIC_ZONE",
+      "zone_id": "ZONE_MOCIONES",
+      "blocks": [
+        { "type": "TEMPLATE", "template_id": "TPL_MOCION_1", "data": { "TEXTO": "..." } },
+        { "type": "TEMPLATE", "template_id": "TPL_MOCION_2", "data": { "TEXTO": "..." } }
+      ]
+    }
+  ],
+  "audit_metadata": {
+    "generated_by": "ASTRA-CORE",
+    "timestamp": "2023-10-12T10:00:00Z",
+    "hash_integrity": "sha256:a1b2c3d4..."
+  }
+}
+```
+
+## 4. Salidas (Formatos y Ejemplos)
+
+### Resultado Principal
+Un archivo binario `.docx` que cumple con el estándar ECMA-376 (Office Open XML).
+
+### Fragmento de `document.xml` Generado
+```xml
+<w:p>
+  <w:r>
+    <w:t>En la ciudad de Bogotá, siendo el día </w:t>
+  </w:r>
+  <!-- Placeholder FECHA resuelto -->
+  <w:r>
+    <w:rPr><w:b/></w:rPr>
+    <w:t>12 de Octubre, 2023</w:t>
+  </w:r>
+</w:p>
+```
+
+### Fragmento de `customXml/item1.xml` (Metadatos Invisibles)
+```xml
+<astra:audit xmlns:astra="http://astra.gov/audit">
+  <astra:buildId>bld_998877</astra:buildId>
+  <astra:integrityHash>sha256:a1b2c3d4...</astra:integrityHash>
+  <astra:templateUsed>ACTA_STD_V2</astra:templateUsed>
+</astra:audit>
+```
+
+## 5. Pipeline de Procesamiento
+
+1.  **Descompresión del Skeleton:** Se abre el `.docx` base como un ZIP en memoria.
+2.  **Pre-procesamiento de Assets:** Descarga de imágenes y parseo de sub-plantillas XML.
+3.  **Iteración de Bloques:**
+    *   Si es `TEMPLATE`: Se carga el XML, se reemplazan variables (`{VAR}` -> valor) y se inyecta en `document.xml`.
+    *   Si es `DYNAMIC_TABLE`: Se localiza la tabla en el XML, se clona la fila plantilla (`w:tr`) por cada ítem de datos y se inyectan los valores.
+    *   Si es `IMAGE`: Se utiliza el `asset_id` proporcionado. Se descarga el blob pre-procesado desde el `AssetStore` (S3). **Optimización:** `BUILDER` no re-procesa, ni redimensiona, ni calcula hashes; confía plenamente en el procesamiento previo de `INGEST`. Se genera un ID de relación (`rId`), se inyecta el binario en `/word/media/`, se actualiza `_rels/document.xml.rels` y se inserta el nodo `w:drawing`.
+    *   Si es `DYNAMIC_ZONE`: Se localiza el SDT con el tag `ASTRA_ZONE:ZONE_ID`. Se inyecta la secuencia de bloques definidos dentro de ese contenedor XML.
+3.  **Resolución de Referencias Externas:** El Builder descarga imágenes desde las URLs de S3 provistas en el bloque `IMAGE` y las procesa para su inclusión.
+4.  **Normalización y Mapeo de Estilos:** Antes de la inyección, el Builder consulta el `style_map` recibido. Si un bloque tiene un tag de estilo lógico, se busca su equivalente físico en el esqueleto y se aplica al `<w:pStyle>`.
+5.  **Gestión de Secciones:** Si hay cambio de sección (ej. Vertical a Horizontal), se inserta un `w:p/w:pPr/w:sectPr` con los headers/footers correctos.
+6.  **Inyección de Comentarios:** Si el input trae advertencias, se genera `comments.xml` y se envuelven los rangos de texto afectados con `w:commentRangeStart/End`.
+7.  **Inyección de Metadatos:** Se crea un nuevo `customXml` part y se vincula en `[Content_Types].xml`.
+8.  **Manejo de Contenido Inesperado (Edge Case):** Si CORE envía un bloque que no tiene un placeholder fijo ni pertenece a una zona dinámica activa, el BUILDER lo inyectará al final del documento en una sección de "Anexos" con un comentario XML de advertencia.
+9.  **Inyección de Trazabilidad (Oculta):** Para cada párrafo generado, el Builder inyectará los atributos de `audio_metadata` (timestamps, chunk_id) en el XML nativo (usando `w:pPr` custom o comentarios `w:commentReference` invisibles) para permitir auditorías forenses que vinculen el texto con el audio original.
+10. **Empaquetado Final:** Se re-comprime todo el árbol de directorios en un nuevo ZIP y se renombra a `.docx`.
+
+## 6. Especificaciones Técnicas por Componente
+
+### A. Motor DOCX / OpenXML
+*   **Lenguaje/Librería:** **Rust** con `quick-xml` y `zip` para máximo rendimiento y seguridad de memoria.
+*   **Alternativa (Python):** `lxml` (para parsing XML rápido) + módulo `zipfile` estándar. **No usar** `python-docx` para la generación final ya que limita el acceso a features avanzadas (customXml, comments complejos).
+*   **Enfoque:** Manipulación directa del árbol XML. Es más complejo pero ofrece control total sobre el estándar OOXML.
+
+### B. Template Merger
+*   **Método:** Reemplazo de tokens basado en texto para variables simples (`str.replace('{VAR}', val)` en el XML plano cuidado con el escape HTML) y manipulación de nodos DOM para inyecciones estructurales.
+*   **Escape:** Todo valor de texto inyectado debe ser escapado (`&` -> `&amp;`, `<` -> `&lt;`).
+
+### C. Inyección de Imágenes
+*   **Formatos:** JPG, PNG, JPEG. (SVG convertir a PNG si es necesario compatibilidad legacy).
+*   **Dimensiones:** Convertir píxeles a **EMUs** (English Metric Units). 1 pixel ≈ 9525 EMUs (a 96 DPI).
+*   **Relaciones:** Gestión estricta de `rId` en `document.xml.rels`. IDs deben ser únicos y secuenciales.
+
+### D. Tablas Dinámicas (Row Repeater)
+*   **Lógica:**
+    1.  Encontrar `w:tbl` que contiene un tag/comentario marcador `ASTRA_TABLE:ID`.
+    2.  Identificar la fila (`w:tr`) que sirve de molde.
+    3.  Eliminar filas de ejemplo del skeleton.
+    4.  Iterar datos: clonar nodo `w:tr`, reemplazar celdas, append al `w:tbl`.
+*   **Streaming:** Para tablas >1000 filas, escribir el XML al buffer de salida progresivamente para no saturar RAM.
+
+### E. Comentarios (`<w:comment>`)
+*   **Componentes:**
+    *   `word/comments.xml`: Diccionario de comentarios (id, autor, texto, fecha).
+    *   `document.xml`: Referencias `w:commentRangeStart`, `w:commentRangeEnd`, `w:commentReference` con el mismo ID.
+
+### F. Metadatos Invisibles
+*   **Implementación:** **Custom XML Parts**. Es el estándar para incrustar datos estructurados de negocio en Office.
+*   **Binding:** No es necesario hacer binding visual (content controls mapeados), solo almacenamiento.
+
+## 7. Mecánicas de Alta Fidelidad (ADN Docx)
+
+### A. Preservación de Run Properties (w:rPr)
+*   **Mecánica:** BUILDER debe heredar o aplicar el nodo `<w:rPr>` (Run Properties) definido en el estilo del esqueleto o en la sub-plantilla. Esto incluye: `w:sz` (tamaño), `w:rFonts` (tipografía exacta), `w:kern` (interletreado) y `w:spacing`.
+*   **Objetivo:** Que el texto generado sea visualmente indistinguible del histórico.
+
+### B. Inyección de Sub-plantillas (XML Grafting)
+*   **Mecánica:** Para estructuras complejas (firmas, sellos), BUILDER realiza un "injerto" de XML puro extraído por INGEST. No intenta reconstruir la tabla en código; pega el fragmento `<w:tbl>` o `<w:p>` original conservando cada atributo nativo.
+
+## 8. Contratos API / Interfaces Internas
+
+### `POST /v1/builder/build`
+Solicita la construcción de un documento.
+
+**Firma:**
+```typescript
+function buildDocument(input: {
+  skeleton_url: string;
+  output_filename?: string;
+  blocks: ContentBlock[];
+  audit: AuditInfo;
+}) -> { build_id: string; status: "QUEUED" | "PROCESSING" }
+```
+
+### `GET /v1/builder/status/{build_id}`
+Consulta estado y obtiene URL de descarga.
+
+**Respuesta:**
+```json
+{
+  "status": "COMPLETED",
+  "download_url": "https://api.astra.gov/download/signed/doc_123.docx",
+  "warnings": ["Placeholder {ADDRESS} not found in template TPL_HEADER"]
+}
+```
+
+## 8. Criterios de Aceptación y Métricas
+1.  **Validez OOXML:** El documento generado debe pasar la validación de "Open XML SDK Productivity Tool" sin errores críticos.
+2.  **Rendimiento:**
+    *   Doc simple (5 págs, 2 imgs): < 800ms.
+    *   Doc complejo (50 págs, tabla 200 filas): < 3s.
+3.  **Integridad:** Hash SHA-256 del contenido generado debe coincidir con el metadato inyectado.
+
+## 9. Manejo de Errores y Casos Límite
+*   **Imagen no encontrada (404):** No fallar el build. Insertar una imagen placeholder local ("Imagen no disponible") y añadir un Warning en la respuesta API y un Comentario en el Word.
+*   **XML Malformado en Sub-plantilla:** Abortar build con error `500 TEMPLATE_CORRUPTION` para evitar generar docs corruptos.
+*   **Caracteres Ilegales:** Filtrar caracteres de control ASCII (0x00-0x1F, excepto tab/newline) antes de escribir XML.
+
+## 10. Seguridad y Privacidad
+*   **XXE Injection:** Deshabilitar la resolución de entidades externas en el parser XML (`resolve_entities=False`).
+*   **Path Traversal:** Validar que los nombres de archivos dentro del ZIP no contengan `../`.
+*   **Limpieza:** Borrar archivos temporales de imágenes inmediatamente después de cerrar el ZIP.
+
+## 11. Pruebas y Validación
+*   **Unitarias:** Testear el "Repeater" de tablas con 0, 1 y 100 filas.
+*   **Integración:** Generar un documento con todos los features (texto, img, tabla, comentario, metadata) y abrirlo programáticamente con Word/LibreOffice headless para verificar que no crashea.
+*   **QA Visual:** Comparar screenshots de la primera página de un documento generado vs. referencia (Golden Master).
+
+## 12. Entregables y Artefactos
+1.  **Binario/Container:** `astra-builder:v1.0` (Docker image).
+2.  **Librería Core:** Crate de Rust o Paquete Python `astra-docx-engine`.
+3.  **Documentación:** Markdown con ejemplos de JSON de entrada para cada tipo de bloque.
+4.  **Banco de Imágenes:** Set de imágenes placeholder (error, cargando, etc.).
+
+## 13. Diagrama de Componentes (Flujo Interno)
+
+```
+[Request JSON] 
+      |
+      v
+(Validator) --> (Error 400)
+      |
+(Skeleton Unzipper) --> [Memory File System]
+      |
+(Asset Fetcher) --> [Image Cache]
+      |
+(XML Composer)
+      |-- [Template Merger] (Text replacement)
+      |-- [Table Engine] (Row cloning)
+      |-- [Image Injector] (Media dir + Rels)
+      |-- [Audit Injector] (CustomXML)
+      |
+(Zipper) --> [Output Buffer]
+      |
+(Storage Uploader) --> [S3 URL]
+```
+
+## 14. Suposiciones
+1.  Los esqueletos (`.docx`) de entrada están limpios y creados siguiendo las guías de estilo de ASTRA (sin estilos directos sucios, usando estilos nombrados).
+2.  El sistema de archivos temporal del contenedor tiene espacio suficiente para manipular los ZIPs descomprimidos (al menos 2x del tamaño del doc).
+3.  **Integración con Sesiones:** El Builder no hace "append" incremental a un documento en vivo. Recibe la lista final de bloques desde el Session Buffer gestionado por **ASTRA-ORCHESTRATOR**.
+
+## 15. Riesgos y Mitigaciones
+*   **Riesgo:** Documentos gigantes (500MB+) por muchas imágenes.
+    *   *Mitigación:* Implementar redimensionamiento automático de imágenes en el `Asset Fetcher` (max 2000px width).
+*   **Riesgo:** Corrupción de `document.xml.rels`.
+    *   *Mitigación:* Usar una librería estricta para gestionar los IDs de relación, nunca manipularlos manualmente con strings.
+
+## 16. Plan de Evolución
+1.  **Iteración 1:** Generación básica secuencial (Python).
+2.  **Iteración 2:** Reescribir núcleo crítico en Rust para concurrencia y velocidad. Soporte de tablas complejas (merge cells).
+3.  **Iteración 3:** Preview en tiempo real (convertidor DOCX -> PDF/HTML integrado en el builder).
+
+---
+
+## Anexo: Contrato de Integración (JSON Summary)
+
+```json
+{
+  "module": "ASTRA-BUILDER",
+  "version": "1.0.0",
+  "inputs": {
+    "build_payload": {
+      "skeleton_url": "string (s3/http)",
+      "metadata": { "tenant_id": "string", "doc_type": "string" },
+      "skeleton_id": "string",
+      "style_map": { "Estilo_Logico": "ESTILO_FISICO" },
+      "blocks": [
+        {
+          "type": "TEMPLATE | IMAGE | DYNAMIC_TABLE | RAW_XML | DYNAMIC_ZONE",
+          "target_placeholder": "string (ID en el skeleton)",
+          "data": "object (key-value) | array | string (asset_id)",
+          "audio_metadata": { "time_start": "string", "time_end": "string", "chunk_id": "string" }
+        }
+      ],
+      "options": {
+        "compress_images": true,
+        "inject_audit": true
+      }
+    }
+  },
+  "outputs": {
+    "success_response": {
+      "build_id": "string",
+      "status": "COMPLETED",
+      "artifacts": {
+        "docx_url": "string",
+        "hash_sha256": "string"
+      },
+      "performance_ms": "integer"
+    }
+  },
+  "endpoints": {
+    "build": {
+      "method": "POST",
+      "path": "/v1/build"
+    }
+  }
+}
+```

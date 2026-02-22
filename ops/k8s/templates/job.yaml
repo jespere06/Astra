@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.jobName }}-{{ .Values.runId }}
+  namespace: astra-mlops
+  labels:
+    app: astra-trainer
+    tenant: {{ .Values.tenantId }}
+spec:
+  ttlSecondsAfterFinished: 3600 # Garbage Collection automático (1 hora)
+  backoffLimit: 2 # Máximo 2 reintentos si falla (ahorro de costos GPU)
+  template:
+    spec:
+      restartPolicy: OnFailure
+      
+      # Selector de Nodos (GPU Pool)
+      nodeSelector:
+        accelerator: nvidia-gpu
+      
+      # Tolerancia para nodos Tainted (dedicados a GPU)
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+      containers:
+        - name: trainer
+          image: "{{ .Values.trainer.image.repository }}:{{ .Values.trainer.image.tag }}"
+          imagePullPolicy: {{ .Values.trainer.image.pullPolicy }}
+          
+          # Comando de ejecución con argumentos dinámicos
+          command: ["python", "train.py"]
+          args:
+            - "--tenant_id"
+            - "{{ .Values.tenantId }}"
+            - "--dataset_uri"
+            - "{{ .Values.datasetUri }}"
+            - "--base_model"
+            - "{{ .Values.baseModel }}"
+            - "--epochs"
+            - "3"
+
+          # Variables de entorno para MLflow y AWS/S3
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow-service:5000"
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: "{{ .Values.mlflow.artifactRoot.s3.endpointUrl }}"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mlflow.artifactRoot.s3.awsAccessKeyIdSecret }}
+                  key: access_key
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mlflow.artifactRoot.s3.awsSecretAccessKeySecret }}
+                  key: secret_key
+
+          # Solicitud estricta de recursos GPU
+          resources:
+            limits:
+              nvidia.com/gpu: {{ .Values.trainer.gpu.count }} # Solicita 1 GPU física
+              memory: "16Gi"
+            requests:
+              cpu: "2000m"
+              memory: "8Gi"
+          
+          # Montaje de memoria compartida para dataloaders de PyTorch
+          volumeMounts:
+            - mountPath: /dev/shm
+              name: dshm
+
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory

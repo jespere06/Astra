@@ -1,0 +1,16 @@
+[
+    {
+        "n_docs": 5,
+        "duration_seconds": 399.8482905830024,
+        "peak_ram_mb": 364.09,
+        "peak_cpu_percent": 145.3,
+        "success": true
+    },
+    {
+        "n_docs": 25,
+        "duration_seconds": 1277.9946412080317,
+        "peak_ram_mb": 719.14,
+        "peak_cpu_percent": 111.2,
+        "success": true
+    }
+]

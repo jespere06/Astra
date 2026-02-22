@@ -1,0 +1,51 @@
+# ASTRA MLOps Infrastructure Configuration
+mlflow:
+  enabled: true
+  image:
+    repository: mlflow/mlflow
+    tag: v2.9.2
+  
+  service:
+    type: ClusterIP
+    port: 5000
+  
+  # Persistencia de Metadatos (PostgreSQL Compartido)
+  backendStore:
+    database:
+      host: "postgres-astra-shared"
+      port: 5432
+      name: "mlflow_db"
+      user: "mlflow_user"
+      # Password inyectado vía K8s Secrets
+      passwordSecret: "mlflow-db-secret"
+      passwordSecretKey: "password"
+
+  # Persistencia de Artefactos (S3/MinIO)
+  artifactRoot:
+    s3:
+      bucket: "astra-models"
+      path: "registry"
+      # Credenciales inyectadas vía Environment/IAM Role
+      awsAccessKeyIdSecret: "astra-aws-creds"
+      awsSecretAccessKeySecret: "astra-aws-creds"
+      endpointUrl: "http://minio:9000" # Internal URL
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Configuración del Trainer (Jobs efímeros)
+trainer:
+  image:
+    repository: astra/astra-trainer
+    tag: v1.0.0
+    pullPolicy: IfNotPresent
+  
+  gpu:
+    enabled: true
+    type: "nvidia.com/gpu"
+    count: 1

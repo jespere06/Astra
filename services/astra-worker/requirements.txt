@@ -1,0 +1,15 @@
+# ── Core Transcription ──
+faster-whisper>=1.0.0
+
+# ── Storage & Networking ──
+boto3>=1.34.0
+requests>=2.31.0
+
+# ── Audio Processing ──
+soundfile>=0.12.0
+
+# ── Configuration ──
+pydantic-settings>=2.0.0
+
+# ── Metrics (lightweight) ──
+numpy<2.0.0

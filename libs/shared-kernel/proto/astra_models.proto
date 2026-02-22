@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package astra.shared.v1;
+
+// Importamos tipos conocidos para manejar JSON dinámico y Timestamps
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------
+// ENUMS (Vocabulario Controlado)
+// ---------------------------------------------------------
+
+enum IntentType {
+  INTENT_UNSPECIFIED = 0;
+  INTENT_TEMPLATE = 1;     // Coincide con una plantilla (Llamado a lista, Apertura)
+  INTENT_FREE_TEXT = 2;    // Discurso libre / Debate
+  INTENT_HYBRID = 3;       // Mezcla que requiere reescritura
+  INTENT_SYSTEM = 4;       // Mensajes del sistema (Pausas, Errores)
+}
+
+enum ProcessingStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING = 1;
+  STATUS_PROCESSING = 2;
+  STATUS_COMPLETED = 3;
+  STATUS_FAILED = 4;
+  STATUS_AUDIO_PENDING = 5; // Fallo de IA, requiere intervención o reintento
+}
+
+// ---------------------------------------------------------
+// MODELOS DE CONTEXTO
+// ---------------------------------------------------------
+
+message SessionContext {
+  string tenant_id = 1;
+  string session_id = 2;
+  string skeleton_id = 3; // Versión del esqueleto (Version Pinning)
+  string client_timezone = 4; // Ej: "America/Bogota"
+  
+  // Configuración dinámica (Flags)
+  map<string, bool> config_flags = 5; 
+  // Ej: {"prefer_formal": true, "force_template": false}
+}
+
+// ---------------------------------------------------------
+// MODELOS DE BLOQUE (Unidad atómica de información)
+// ---------------------------------------------------------
+
+// Entrada: Lo que llega del cliente (Audio o Texto crudo)
+message TranscriptBlock {
+  string raw_text = 1;
+  int64 start_ms = 2; // Milisegundos desde el inicio
+  int64 end_ms = 3;
+  string speaker_id = 4;
+  float confidence = 5;
+  bytes audio_chunk = 6; // Opcional, si se envía audio binario
+}
+
+// Salida: Lo que devuelve ASTRA-CORE tras procesar
+message AstraBlock {
+  string block_id = 1;
+  IntentType intent = 2;
+  string template_id = 3; // ID de la plantilla detectada (si aplica)
+  
+  // Texto normalizado y limpio
+  string clean_text = 4;
+  
+  // Datos estructurados para tablas dinámicas
+  // Ej: [{"Concejal": "Juan", "Voto": "Si"}]
+  google.protobuf.ListValue structured_data = 5;
+  
+  // Metadatos de auditoría
+  map<string, string> metadata = 6;
+  
+  // Información de trazabilidad
+  int64 processing_time_ms = 7;
+}
+
+// ---------------------------------------------------------
+// SERVICIOS (Definición de RPCs futuros)
+// ---------------------------------------------------------
+
+service AstraCoreService {
+  rpc ProcessChunk (TranscriptBlock) returns (AstraBlock);
+}

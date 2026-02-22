@@ -1,0 +1,178 @@
+# Roadmap de Ejecución: Fase 1 - ASTRA Genesis (MVP & Integración)
+
+## 1. Meta / Objetivo de la Fase
+Establecer la **espina dorsal operativa** de la plataforma ASTRA. El objetivo no es la perfección algorítmica de la IA, sino lograr la **conectividad End-to-End (E2E)** de los módulos. Al finalizar esta fase, el sistema debe ser capaz de ingerir un archivo `.docx` (Ingest), abrir una sesión de grabación (Orchestrator), transcribir un audio de prueba (Core), ensamblar un documento válido (Builder) y sellarlo criptográficamente (Guard) en un entorno local contenerizado.
+
+## 2. Suposiciones Iniciales
+1.  **Monorepo:** Se utilizará una estrategia de Monorepo (nx o turborepo) para facilitar la gestión de contratos compartidos y despliegue atómico en esta fase inicial.
+2.  **Stack Tecnológico:** Python 3.10+ para Core/Ingest, Node.js/TypeScript para Orchestrator, Rust (o Python optimizado) para Builder.
+3.  **Infraestructura Local:** Todo correrá sobre Docker Compose emulando servicios AWS (MinIO para S3, LocalStack para KMS simulado).
+4.  **Seguridad:** La autenticación se manejará mediante un *Stub/Mock* de JWT en el API Gateway para no bloquear el desarrollo del backend.
+
+## 3. Análisis de Impacto
+*   **Datos:** Se definirán los esquemas físicos en PostgreSQL (`tenants`, `sessions`) y estructuras volátiles en Redis. Cambio de paradigma de "Specs en papel" a "DDL Ejecutable".
+*   **Infraestructura:** Requerimiento de ~16GB RAM en máquinas de desarrollo para correr los contenedores de ML (Whisper) y Bases de Datos simultáneamente.
+*   **Riesgo Crítico:** "Integration Hell". El riesgo de que los JSONs definidos en papel no coincidan con la implementación real es alto. Se mitiga con la Tarea GEN-01 (Shared Kernel).
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+### Hito 1: Cimientos y Definiciones (Días 1-3)
+
+**[GEN-01]**
+- **Título:** Implementación de Shared Kernel y Contratos de Interfaz (Multi-Language Sync)
+- **Descripción:** Crear librería compartida (`astra-shared`). **Crítico para el desarrollador:** Para evitar desajustes entre Pydantic (Python/Core) y TypeScript (Node.js/Orchestrator), se debe usar un generador de código estricto. Se recomienda el uso de **gRPC (.proto)** o un **OpenAPI/Swagger Spec** central del cual se generen automáticamente los modelos en ambos lenguajes. Prohibido el mantenimiento manual por separado de los DTOs.
+- **Dónde:** `/libs/shared-kernel`
+- **Owner sugerido:** Lead Architect / Backend Lead
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** Ninguna
+- **Entregables:** Repositorio con contratos .proto/.yaml y scripts de generación de código (`codegen`).
+- **Criterios de Éxito:** Todos los módulos importan los DTOs generados automáticamente.
+- **Tests requeridos:** Verificación de compatibilidad binaria/JSON entre modelos generados.
+- **Riesgos:** Curva de aprendizaje inicial de las herramientas de generación.
+
+**[GEN-02]**
+- **Título:** Configuración de Entorno Local (Docker Compose)
+- **Description:** Orquestación de infraestructura local. Levantar PostgreSQL, Redis, Qdrant y MinIO con persistencia de volúmenes y scripts de inicialización (seeds). **Incluir un servicio de Reverse Proxy (Nginx/Traefik) para el enrutamiento de tráfico (Router).**
+- **Where:** `/infra/local`
+- **Owner sugerido:** DevOps Engineer
+- **Prioridad:** P0
+- **Estimación:** 8 horas
+- **Dependencias:** Ninguna
+- **Entregables:** `docker-compose.yml` funcional, `.env.example`, configuración de Proxy.
+- **Criterios de Éxito:** `docker compose up` levanta todos los servicios en < 2 minutos. Conexión verificada a DBs. Proxy rutea correctamente `api.astra.local`.
+- **Tests requeridos:** Scripts de "Healthcheck" para cada servicio.
+- **Riesgos:** Conflictos de puertos en máquinas de desarrolladores.
+
+**[GEN-03]**
+- **Título:** Creación de Artefactos de Prueba (Golden Data/Seeds)
+- **Descripción:** Crear manualmente un `skeleton_seed.docx` (con todas las casuísticas: tabla, imagen, estilos) y un `audio_seed.wav` (dictado del contenido) que sirvan como verdad absoluta para los tests de integración.
+- **Dónde:** `/tests/fixtures`
+- **Owner sugerido:** QA Lead
+- **Prioridad:** P1
+- **Estimación:** 4 horas
+- **Dependencias:** Ninguna
+- **Entregables:** Archivos físicos validados y limpios de corrupción.
+- **Criterios de Éxito:** Ingest no falla al procesar el seed.
+
+
+### Hito 2: El Flujo de Datos (Días 4-8)
+
+**[ING-01]**
+- **Título:** ASTRA-INGEST: Extractor de Assets y Skeleton
+- **Descripción:** Implementar el parser de `.docx`. Debe descomprimir el zip, extraer imágenes a MinIO (calculando pHash), y separar el XML estructural (`document.xml` limpio) de los estilos. **Generación automática de un `style_map` canónico y persistencia en Postgres.**
+- **Dónde:** `/services/astra-ingest`
+- **Owner sugerido:** Backend Dev (Python/Rust)
+- **Prioridad:** P1
+- **Estimación:** 24 horas
+- **Dependencias:** GEN-01, GEN-02
+- **Entregables:** Endpoint `POST /ingest` que recibe un DOCX y puebla la DB de Skeletons y Assets.
+- **Criterios de Éxito:** Subir un archivo con 1 imagen y verla aparecer en MinIO y el registro en Postgres.
+- **Tests requeridos:** Integration test con un set de 5 archivos DOCX de prueba.
+- **Riesgos:** Complejidad del formato OOXML. XML malformados.
+
+**[ORC-01]**
+- **Título:** ASTRA-ORCHESTRATOR: Gestión de Sesión y Buffer Redis
+- **Descripción:** Crear el API Gateway y la lógica de sesión. Implementar `POST /session/start` (carga config y **recuperación del `style_map` del tenant al inicio de sesión**) y `POST /session/append` (guarda en Redis). Debe actuar como router hacia CORE.
+- **Dónde:** `/services/astra-orchestrator`
+- **Owner sugerido:** Backend Dev (Node/Python)
+- **Prioridad:** P0
+- **Estimación:** 20 horas
+- **Dependencias:** GEN-01
+- **Entregables:** API funcional. Datos persistiendo en Redis con TTL.
+- **Criterios de Éxito:** Iniciar sesión, enviar 3 chunks simulados y verificar que en Redis existe una lista con 3 elementos.
+- **Tests requeridos:** Load test ligero (concurrent sessions).
+- **Riesgos:** Latencia en la serialización/deserialización de Redis.
+
+**[BLD-01]**
+- **Título:** ASTRA-BUILDER: Motor de Inyección XML y Mapeo de Estilos
+- **Descripción:** Implementar el motor que toma un Skeleton y una lista de bloques. **Manejo de Sesiones Largas (Ruta 4):** El Builder debe soportar la recepción de datos mediante el patrón **Pass-by-Reference**. Si el Orchestrator envía una `session_ref`, el Builder debe descargar el JSON de bloques directamente desde S3 mediante streaming, evitando agotar la RAM en sesiones de +8 horas.
+- **Manejo de Tablas Complejas (Nivel 5 - Ruta 2):** Si una tabla está marcada como `NON_DYNAMIC` (por contener `vMerge` o complejidad estructural detectada en Ingest), el Builder debe abortar la clonación manual y limitarse a inyectar el bloque como **Texto Plano con formato** o insertar el XML estático de la plantilla sin intentar repetir la fila, evitando así la corrupción del archivo.
+- **Sanitización XML (Nivel 4 - Ruta 6/12):** Prohibido el uso de concatenación de strings para inyectar datos. El motor debe usar obligatoriamente funciones de librería (`setText`, `writeString`) que escapen caracteres reservados (`<`, `>`, `&`). **Inmutabilidad (Ruta 1/3):** Al descargar el Skeleton de S3, el Builder debe usar el `version_id` pineado por el Orquestador. **Estilos por Defecto (Ruta 7):** Si un bloque no trae estilo, usar `DEFAULT_PARAGRAPH_STYLE` de la configuración del Tenant. **Acceso a Activos (Ruta 5):** Privilegiar el acceso directo vía SDK de S3 (IAM Roles) utilizando el `asset_id` e IDs de bucket internos en lugar de URLs presignadas HTTP.
+- **Localización (L10n - Ruta 14/16):** El Builder debe leer `context.timezone` (inyectado por el Orquestador) y transformar todos los timestamps UTC a la hora local antes de inyectarlos en el XML, garantizando la validez legal del acta. **Estrategia de Embebido (Ruta 11/17):** Prohibido el uso de referencias externas (`TargetMode="External"`) para imágenes o medios. El Builder debe descargar físicamente el binario de S3 e **incrustarlo** dentro del paquete ZIP del DOCX (`/word/media/`) con referencias relativas, garantizando que el archivo sea portátil y funcional totalmente offline.
+ **Resiliencia de Esquema (Append Fallback - Ruta 2):** Fallback al final si falla el placeholder.
+- **Lógica Híbrida:** Si el bloque indica `use_static_text: false` (Ruta 4), el Builder debe inyectar el texto dinámico transcrito usando las propiedades de estilo de la plantilla. **Micro-Parser de Riqueza:** El motor debe detectar sintaxis Markdown básica (listas numeradas/bullets) y convertirlas a nodos XML estructurales (`<w:numPr>`).
+- **Crítico: Para `DYNAMIC_TABLE`, el motor debe localizar la tabla mediante el ID físico `TBL_ID` y utilizar la única fila marcada con el atributo XML `astra:rowType="template"` (marcador físico `TEMPLATE_ROW`) como molde para clonación y mapeo de datos (Ruta 2: Dynamic Table).** Además, debe **inyectar metadatos invisibles** en cada párrafo generado: 1. `chunk_id` del audio original. 2. `timestamp` exacto. Estos metadatos se guardan en Custom XML Properties o `w:comment`. **Lógica de "Soft-fail" (Fallback de Estilos/Plantillas - Ruta 20):** Si el estilo solicitado no existe, el Builder debe realizar un **Reverse Style Lookup**. Si una plantilla detectada no tiene un ruteo mapeado por el Admin, debe procesarse automáticamente como **Texto Plano** inyectado en la zona principal con una advertencia en los logs. **Para bloques `AUDIO_PENDING` (Auditoría v2.1), el Builder debe insertar un texto en rojo indicando "Transcripción Pendiente - Escuchar audio original" e incluir un hipervínculo funcional utilizando la URL Presignada (con expiración de 7 días) proporcionada por el Orquestador en el campo `fallback_url`.**
+- **Dónde:** `/services/astra-builder`
+- **Owner sugerido:** Backend Dev (Rust/Python)
+- **Prioridad:** P0
+- **Estimación:** 40 horas
+- **Dependencias:** ING-01, ING-11, COR-06
+- **Entregables:** Binario/Servicio que genera `.docx` con soporte para trazabilidad meta-data y recuperación de estilos.
+- **Criterios de Éxito:** El DOCX generado contiene metadatos de tiempo y `chunk_id`, y las tablas respetan el formato de la fila máster.
+- **Tests requeridos:** Validación XML contra esquemas ECMA-376 y tests de fidelidad de estilos.
+- **Riesgos:** Corrupción de archivos zip al inyectar hipervínculos dinámicos.
+
+### Hito 3: Inteligencia y Cierre (Días 9-14)
+
+**[COR-01]**
+- **Título:** ASTRA-CORE: Pipeline de Transcripción e Intención
+- **Descripción:** Implementar el wrapper de Whisper y el clasificador simple. Si no hay GPU disponible en dev, usar modelo `tiny` o API externa mockeada. Normalización de texto básica.
+- **Dónde:** `/services/astra-core`
+- **Owner sugerido:** ML Engineer
+- **Prioridad:** P1
+- **Estimación:** 24 horas
+- **Dependencias:** GEN-02
+- **Entregables:** Servicio que recibe audio/texto y devuelve JSON estructurado con `intent`.
+- **Criterios de Éxito:** Audio "Hola mundo" -> JSON `{"text": "Hola mundo", "intent": "LIBRE"}`.
+- **Tests requeridos:** Unit tests de limpieza de texto (Regex).
+- **Riesgos:** Alucinaciones del modelo (mitigar con tests deterministas).
+
+**[GRD-01]**
+- **Título:** ASTRA-GUARD: Hashing y Sellado
+- **Descripción:** Implementar cálculo de SHA-256 del binario final y simulación de firma. Almacenamiento del manifiesto de integridad.
+- **Dónde:** `/services/astra-guard`
+- **Owner sugerido:** Security/Backend Dev
+- **Prioridad:** P2
+- **Estimación:** 12 horas
+- **Dependencias:** BLD-01
+- **Entregables:** Endpoint que recibe binario y devuelve hash + firma simulada.
+- **Criterios de Éxito:** Verificar que dos builds idénticos generan el mismo hash.
+- **Tests requeridos:** Test de integridad (modificar 1 bit y verificar fallo).
+
+**[INT-01]**
+- **Título:** Integración E2E - "El Camino Feliz"
+- **Descripción:** Script de prueba que ejecute la Ruta 2 completa: Subir DOCX base -> Iniciar Sesión -> Enviar Audio -> Finalizar -> Descargar DOCX -> Verificar Hash.
+- **Dónde:** `/tests/e2e`
+- **Owner sugerido:** QA Automation / Lead
+- **Prioridad:** P0
+- **Estimación:** 16 horas
+- **Dependencias:** TODAS las anteriores
+- **Entregables:** Script de Python/Bash `run_smoke_test.sh`.
+- **Criterios de Éxito:** El script corre en CI/CD sin intervención humana y pasa en verde.
+
+*(Nota: ASTRA-LEARN se mueve al Backlog de la Fase 2)*
+
+---
+
+## 5. Directivas de Calidad
+1.  **Logging:** Todo log debe ser JSON e incluir `trace_id`, `tenant_id` y `component`. Prohibido `console.log` o `print` simples.
+2.  **Manejo de Errores:** Ningún servicio debe crashear por un input malformado (400 vs 500). Usar "Graceful degradation" (ej. si falla una imagen, poner placeholder, no abortar build).
+3.  **Contratos:** Prohibido modificar un endpoint sin actualizar primero el DTO en `shared-kernel`.
+4.  **Performance:** El Build de un documento simple no debe exceder 2 segundos en local.
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| ID | Riesgo | Probabilidad | Impacto | Mitigación |
+|----|--------|--------------|---------|------------|
+| R1 | **Infierno de XML:** El Builder genera DOCX corruptos que Word no abre. | Alta | Crítico | Usar herramienta de validación Open XML SDK tool en CI. Empezar con inyección de texto plano solamente. |
+| R2 | **Latencia de Whisper:** La transcripción es demasiado lenta en CPU local. | Media | Medio | Usar Whisper `tiny` o `base.en` para desarrollo, o configurar flag para usar Mock de ASR. |
+| R3 | **Divergencia de Esquemas:** El JSON que envía Core no es el que espera Builder. | Alta | Crítico | **GEN-01** (Librería compartida) es obligatorio antes de codear lógica. |
+| R4 | **Fugas de Memoria:** El procesamiento de zips grandes agota la RAM. | Baja | Alto | Implementar streams (tuberías) en lugar de cargar todo el archivo en memoria. |
+
+## 7. Checklist de Aceptación (DoD Global)
+- [ ] **Infra:** `docker compose up` levanta 6 contenedores (4 servicios + 2 DBs) estables.
+- [ ] **Ingest:** Se ha procesado al menos 1 Plantilla Real y extraído sus assets correctamente.
+- [ ] **Core:** Responde a un audio de prueba con un JSON válido en < 2s (mock) o < 10s (real).
+- [ ] **Builder:** Genera un `.docx` que Microsoft Word abre sin mostrar mensajes de "Reparar archivo".
+- [ ] **Orchestrator:** Mantiene el estado de una sesión simulada de 10 minutos.
+- [ ] **Guard:** Genera un hash SHA-256 verificable.
+- [ ] **Código:** Todo commit pasa linter y tests unitarios.
+
+## 8. Artefactos para Due Diligence
+1.  Repositorio de Código con historial limpio.
+2.  Documentación de API (Swagger/OpenAPI generado automáticamente).
+3.  Reporte de ejecución del Test E2E (Evidencia de funcionalidad).
+4.  Diagrama de Arquitectura actualizado vs Implementación real.

@@ -1,0 +1,210 @@
+Esta es la especificación técnica y operativa detallada para el módulo **ASTRA-GUARD (El Auditor)**, diseñada para arquitectos de software, ingenieros de infraestructura y especialistas en ciberseguridad.
+
+---
+
+# Especificación Técnica: Módulo ASTRA-GUARD (El Auditor)
+
+## 1. Resumen Ejecutivo
+ASTRA-GUARD es el pilar de confianza y cumplimiento de la plataforma. Su función es garantizar la integridad absoluta de los documentos procesados mediante hashing criptográfico, gestionar el historial completo de cambios (Time-Travel) y asegurar el aislamiento estricto de datos entre diferentes alcaldías o concejos (Multi-tenancy) mediante cifrado con llaves específicas por inquilino.
+
+## 2. Objetivos del Módulo
+*   **Integridad Verificable:** Garantizar que el 100% de los documentos almacenados no hayan sido alterados desde su creación.
+*   **Versionado Temporal:** Permitir la recuperación de cualquier estado previo de un documento basado en un *timestamp* específico.
+*   **Aislamiento Multi-tenant:** Asegurar que ningún inquilino pueda acceder a los datos de otro, incluso a nivel de base de datos o almacenamiento físico.
+*   **Auditoría Forense:** Proporcionar un rastro de auditoría inmutable de todas las operaciones de creación y consulta.
+
+## 3. Entradas (Formatos y Ejemplos)
+*   **Artefactos:** Archivos binarios (`.docx`, `.pdf`, `.zip`) o estructuras JSON (metadatos de proceso).
+*   **Metadata de Tenant:** Identificadores únicos (`tenant_id`), contexto de usuario y etiquetas temporales.
+
+### Ejemplo de `snapshotRequest` (JSON)
+```json
+{
+  "request_id": "req-998877",
+  "artifact_ref": {
+    "artifact_id": "doc-550",
+    "path": "s3://astra-temp/incoming/acta_final.docx",
+    "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  },
+  "context": {
+    "tenant_id": "CONCEJO_BOGOTA",
+    "user_id": "usr-443",
+    "timestamp": "2026-02-11T14:30:00Z"
+  }
+}
+```
+
+## 4. Salidas (Formatos y Ejemplos)
+
+### Ejemplo de `snapshotManifest` (JSON)
+Contiene la prueba de integridad basada en Merkle Tree y firmas digitales.
+```json
+{
+  "snapshot_id": "snap-12345",
+  "artifact_id": "doc-550",
+  "version": 4,
+  "root_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "chunks": [
+    {"id": "chunk_0", "hash": "sha256:7f83b..."},
+    {"id": "chunk_1", "hash": "sha256:8829a..."}
+  ],
+  "signatures": [
+    {
+      "key_id": "arn:aws:kms:us-east-1:1234:key/tenant-bogota-cmk",
+      "signature": "base64:...",
+      "algorithm": "RSASSA_PSS_SHA_256"
+    }
+  ],
+  "timestamp": "2026-02-11T14:31:05Z"
+}
+```
+
+### Ejemplo de respuesta a `verifyIntegrity`
+```json
+{
+  "snapshot_id": "snap-12345",
+  "verified": true,
+  "verification_timestamp": "2026-02-11T15:00:00Z",
+  "proof_of_integrity": {
+    "method": "MerkleRootVerification",
+    "details": "All chunks match the signed root hash."
+  }
+}
+```
+
+## 5. Pipeline de Procesamiento
+
+1.  **Ingesta & Normalización:** Recepción del artefacto. Si es JSON/XML, se aplica una normalización canónica (ordenar llaves, eliminar espacios en blanco volátiles).
+2.  **Chunking:** El archivo se divide en bloques de tamaño fijo (ej. 4MB) para facilitar la verificación parcial y el manejo de archivos grandes.
+3.  **Hashing (SHA-256):** Se calcula el hash de cada bloque (*Leaf Hashes*).
+4.  **Construcción de Merkle Tree:** Se agrupan los hashes para generar el `rootHash` único del artefacto.
+5.  **Attestation (KMS):** El `rootHash` + Metadatos se envían al servicio de gestión de llaves (KMS) del inquilino para firma digital.
+6.  **Persistencia Inmutable:** El archivo se guarda en almacenamiento WORM (Write Once, Read Many). El manifiesto se guarda en la base de datos de auditoría.
+7.  **Indexación Temporal:** Se crea una entrada en el índice de Time-Travel vinculando `(artifact_id, tenant_id, timestamp)`.
+
+## 6. Especificaciones Técnicas por Componente
+
+### A. Algoritmos de Hashing e Integridad
+*   **Primario:** **SHA-256**. Estándar industrial por su resistencia a colisiones y soporte en hardware.
+*   **Estructura:** **Merkle Trees**. Permite probar que un fragmento pertenece a un archivo sin necesidad de procesar el archivo completo nuevamente.
+
+### B. Aislamiento Multi-tenant (Elite Isolation)
+*   **Capa de Datos:** Cada inquilino tiene su propio prefijo en S3 (ej. `s3://astra-vault/{tenant_id}/`).
+*   **Capa de Cifrado (Envelope Encryption):** Uso de **AWS/GCP KMS**. Cada inquilino posee una Master Key (CMK) única. ASTRA-GUARD genera llaves de datos (DEK) cifradas con la CMK del inquilino para cada snapshot.
+*   **Aislamiento en Tráfico:** Uso de `tenant_id` en las cabeceras de todas las llamadas internas para validación en el API Gateway mediante políticas de RBAC.
+
+### C. Time-Travel Query
+*   **Lógica:** Búsqueda por `nearest_timestamp <= requested_timestamp` sobre el índice de versiones.
+*   **Base de Datos:** PostgreSQL con índices BRIN o B-Tree compuestos para optimizar búsquedas por tiempo en grandes volúmenes.
+
+### D. Almacenamiento Inmutable
+*   **Tecnología:** **S3 Object Lock** en modo "Compliance" o **Azure Immutable Storage**. 
+*   **Política:** Ningún usuario (incluyendo administradores) puede borrar o modificar un snapshot antes de que expire su política de retención (ej. 5 años por ley).
+
+## 7. Contratos API / Interfaces Internas
+
+### `POST /v1/guard/snapshots`
+Crea un punto de control de integridad.
+*   **Signature:** `createSnapshot(artifactRef, tenantId) -> snapshotId`
+
+### `GET /v1/guard/time-travel/{artifactId}`
+Busca una versión específica en el tiempo.
+*   **Signature:** `getVersionAt(artifactId, tenantId, timestamp) -> snapshotManifest`
+
+### `POST /v1/guard/verify/{snapshotId}`
+Valida que el archivo físico actual coincida con el registro histórico.
+
+## 8. Criterios de Aceptación y Métricas
+*   **Integridad:** El 100% de las verificaciones deben detectar cambios si se altera un solo bit del archivo original.
+*   **Rendimiento:** Creación de snapshot para un doc de 10MB en `< 2 segundos`.
+*   **Aislamiento:** Un test de penetración debe confirmar que un `user_id` de la `Alcaldía_A` recibe un `403 Forbidden` al intentar consultar un `snapshot_id` de la `Alcaldía_B`.
+
+## 9. Manejo de Errores y Casos Límite
+*   **Mismatch de Integridad:** Si `verifyIntegrity` falla, se dispara una alerta crítica a seguridad y el archivo se marca como `TAMP_DETECTED`.
+*   **KMS Inalcanzable:** Reintento exponencial (Exponential Backoff). Si el fallo persiste, se bloquea la creación del snapshot para evitar "puntos ciegos" de auditoría.
+*   **Colisión de Versiones:** Si dos procesos intentan actualizar el mismo artefacto al mismo milisegundo, se aplica **Optimistic Concurrency Control**.
+
+## 10. Seguridad y Privacidad
+*   **Logs Inmutables:** Los logs de ASTRA-GUARD se envían a un bucket con política de retención legal (Legal Hold).
+*   **PII (Privacidad):** Posibilidad de definir reglas de "Redacción antes de Hash" para campos extremadamente sensibles (ej. datos de menores), documentando la redacción en el manifiesto.
+
+## 11. Pruebas y Validación
+*   **Chaos Engineering:** Simular la caída del servicio KMS durante un snapshot.
+*   **Integrity Stress:** Corrupción deliberada de bits aleatorios en el almacenamiento para verificar que los scanners de fondo detectan la inconsistencia.
+
+## 12. Entregables y Artefactos
+1.  **Terraform Modules:** Configuración de S3 Object Lock y KMS Keys por tenant.
+2.  **Snapshot Schema:** Definición formal en JSON Schema.
+3.  **Audit CLI:** Herramienta para que auditores externos puedan verificar archivos descargados localmente contra el `rootHash`.
+
+## 13. Diagrama de Componentes (ASCII)
+
+```text
+[ASTRA-CORE/BUILDER] 
+       | (Artifact + Tenant Context)
+       v
+[API Gateway / Auth] 
+       |
+[Ingest & Canonicalizer] 
+       |
+[Hasher & Merkle Builder] <---> [Tenant KMS (Signatures)]
+       |
+       +-----> [Time-Travel Index (Postgres)]
+       |
+       +-----> [WORM Storage (S3 Object Lock)]
+       |
+[Background Verifier Worker] ----> [SIEM / Alerting]
+```
+
+---
+
+## 14. Suposiciones Hechas
+1.  Se dispone de un servicio de KMS (AWS, GCP o Vault) que permite aislamiento de llaves por cliente.
+2.  La redacción de PII (si se requiere) se realiza antes de que el archivo toque el módulo de Hashing.
+
+## 15. Riesgos y Mitigaciones
+*   **Riesgo:** Pérdida de acceso a la llave maestra (CMK) de un inquilino.
+    *   *Mitigación:* Políticas de respaldo de llaves y "Quorum-based access" en el HSM.
+*   **Riesgo:** Costo de almacenamiento por versionado excesivo.
+    *   *Mitigación:* Políticas de ciclo de vida (Tiering) para mover versiones antiguas a Glacier/Cold Storage.
+
+---
+
+## Bloque JSON: Contrato Mínimo de Integración
+
+```json
+{
+  "module": "ASTRA-GUARD",
+  "version": "1.0.0",
+  "endpoints": {
+    "createSnapshot": {
+      "method": "POST",
+      "path": "/v1/guard/snapshots",
+      "input_schema": {
+        "artifactId": "string",
+        "tenantId": "string",
+        "blobPath": "string",
+        "metadata": "object"
+      }
+    },
+    "verifyIntegrity": {
+      "method": "POST",
+      "path": "/v1/guard/verify/{snapshotId}",
+      "output_schema": {
+        "verified": "boolean",
+        "timestamp": "ISO8601"
+      }
+    },
+    "getVersionAt": {
+      "method": "GET",
+      "path": "/v1/guard/time-travel/{artifactId}",
+      "query_params": ["timestamp", "tenantId"]
+    }
+  },
+  "security": {
+    "auth_type": "mTLS + JWT",
+    "encryption": "AES-256-GCM (Envelope with Tenant CMK)",
+    "integrity": "Merkle Tree + SHA-256"
+  }
+}
+```

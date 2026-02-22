@@ -1,0 +1,8 @@
+venv/
+node_modules/
+__pycache__/
+.env*
+dataset_final/
+*.wav
+*.mp3
+.DS_Store

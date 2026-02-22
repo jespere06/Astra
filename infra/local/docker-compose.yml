@@ -1,0 +1,185 @@
+version: '3.8'
+
+networks:
+  astra-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  minio_data:
+    driver: local
+  huggingface_cache:
+    driver: local
+
+services:
+  # 1. Relational Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: astra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${ASTRA_DB_USER}
+      POSTGRES_PASSWORD: ${ASTRA_DB_PASSWORD}
+      POSTGRES_DB: ${ASTRA_DB_NAME}
+    ports:
+      - "${ASTRA_DB_PORT}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - astra-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ASTRA_DB_USER} -d ${ASTRA_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Session Cache
+  redis:
+    image: redis:7-alpine
+    container_name: astra-redis
+    restart: unless-stopped
+    ports:
+      - "${ASTRA_REDIS_PORT}:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - astra-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3. Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: astra-qdrant
+    restart: unless-stopped
+    ports:
+      - "${ASTRA_QDRANT_HTTP_PORT}:6333"
+      - "${ASTRA_QDRANT_GRPC_PORT}:6334"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    networks:
+      - astra-net
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 3.1 Qdrant Provisioner (Ephemeral)
+  setup-qdrant:
+    image: curlimages/curl:latest
+    container_name: astra-setup-qdrant
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - ./scripts/init-qdrant.sh:/init-qdrant.sh
+    entrypoint: ["/bin/sh", "/init-qdrant.sh"]
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    networks:
+      - astra-net
+
+  # 4. Object Storage
+  minio:
+    image: minio/minio:latest
+    container_name: astra-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_API_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - ./data/minio:/data
+    networks:
+      - astra-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 4.1 MinIO Provisioner (Ephemeral)
+  setup-minio:
+    image: minio/mc:latest
+    container_name: astra-setup-minio
+    depends_on:
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./scripts/init-minio.sh:/init-minio.sh
+    entrypoint: ["/bin/sh", "/init-minio.sh"]
+    environment:
+      - MINIO_HOST=minio
+      - MINIO_PORT=9000
+      - MINIO_USER=${MINIO_ROOT_USER}
+      - MINIO_PASS=${MINIO_ROOT_PASSWORD}
+      - BUCKETS=${MINIO_BUCKETS}
+    networks:
+      - astra-net
+
+  # 5. Core Services
+  astra-orchestrator:
+    build: 
+      context: ../../services/astra-orchestrator
+    container_name: astra-orchestrator
+    ports:
+      - "8001:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - TENANT_CONFIG_URL=http://tenant-config-service:8080
+      - ENVIRONMENT=development
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ../../services/astra-orchestrator/src:/app/src
+    networks:
+      - astra-net
+
+  astra-core:
+    build: 
+      context: ../../services/astra-core
+    container_name: astra-core
+    ports:
+      - "8002:8001"
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - WHISPER_MODEL_SIZE=tiny
+      - WHISPER_DEVICE=cpu
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    depends_on:
+      - qdrant
+    networks:
+      - astra-net
+
+  # 6. API Gateway / Proxy (GEN-02)
+  proxy:
+    image: nginx:alpine
+    container_name: astra-proxy
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+      - "9001:9001" # MinIO Console forward for convenience
+    networks:
+      - astra-net
+    depends_on:
+      - astra-orchestrator
+      - astra-core
+      - astra-guard

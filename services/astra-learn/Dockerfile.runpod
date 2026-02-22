@@ -1,0 +1,27 @@
+# Usamos la base oficial de RunPod con PyTorch y CUDA 12.1 preinstalado
+FROM runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+
+# Variables de entorno para que Python y CUDA no den problemas
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar Git (necesario para bajar Unsloth)
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# 1. Instalar Unsloth (Magia negra para entrenar Llama-3 2x más rápido con poca VRAM)
+RUN pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+# 2. Instalar dependencias de HuggingFace y LoRA
+RUN pip install --no-deps trl peft accelerate bitsandbytes xformers==0.0.25.post1
+
+# 3. Instalar utilidades de ASTRA (RunPod SDK, S3, etc)
+RUN pip install runpod boto3 requests datasets python-dotenv
+
+WORKDIR /app
+
+# Copiar el código fuente
+COPY services/astra-learn/src/ /app/src/
+COPY services/astra-learn/runpod_training_handler.py /app/
+
+# El comando de inicio que despierta al "Worker"
+CMD ["python", "-u", "runpod_training_handler.py"]

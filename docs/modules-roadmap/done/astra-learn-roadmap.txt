@@ -1,0 +1,155 @@
+# Plan de Ejecución Técnica: Fase de Implementación Core ASTRA-LEARN
+
+## 1. Meta / Objetivo de la Fase
+Implementar el ciclo completo de **MLOps y Aprendizaje Activo** (Active Learning Loop) de la plataforma. El objetivo es desplegar la infraestructura capaz de ingerir correcciones humanas, transformarlas en datasets de entrenamiento curados (libres de PII) y ejecutar pipelines de fine-tuning (LoRA) automatizados que desplieguen nuevos adaptadores neuronales sin intervención manual, garantizando la mejora progresiva de la precisión del sistema por inquilino.
+
+## 2. Suposiciones Iniciales
+1.  **Acceso a Módulos Previos:** `ASTRA-INGEST` está disponible como librería o microservicio para realizar el parsing (DOCX -> XML) requerido por el comparador.
+2.  **Infraestructura GPU:** El cluster Kubernetes cuenta con un Node Pool dedicado con GPUs (NVIDIA T4 o L4) y los drivers pre-instalados.
+3.  **Verdad de Campo:** Se asume que el documento subido por el usuario (`final_artifact`) es 100% correcto y prevalece sobre cualquier lógica interna.
+4.  **Tracking:** Se cuenta con una instancia de MLflow o bucket S3 estructurado para el registro de experimentos y artefactos.
+
+## 3. Análisis de Impacto
+*   **Servicios Afectados:**
+    *   **ASTRA-CORE:** Debe ser capaz de recargar dinámicamente los adaptadores (hot-swap) sin reinicio.
+    *   **ASTRA-ORCHESTRATOR:** Debe actualizar su configuración de sesión para apuntar a las nuevas versiones de modelos.
+    *   **Storage (S3):** Nuevo esquema de carpetas para `datasets/` (encriptado) y `models/adapters/`.
+*   **Riesgos Directos:**
+    *   **Envenenamiento de Datos:** Si el usuario sube un documento erróneo o malicioso, el modelo podría aprender basura. (Mitigación: Validation Gate).
+    *   **Fuga de Privacidad:** Entrenar con nombres reales es un riesgo legal grave. (Mitigación: Presidio).
+    *   **Costos de Cómputo:** Disparar un entrenamiento por cada corrección es inviable. (Mitigación: Buffering/Batching).
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+### [Fase2-T01] Infraestructura de MLOps y Registro de Modelos [X]
+*   **Título:** Setup del Model Registry y Pipeline de Entrenamiento Base
+*   **Descripción:** Configurar el backend de MLflow (o estructura S3 + DB) para versionado de modelos. Crear la imagen Docker base para entrenamiento (`astra-trainer`) con PyTorch, `peft` y `bitsandbytes`. Definir los manifiestos de Kubernetes (K8s Job) que montan volúmenes y solicitan recursos GPU.
+*   **Dónde:** `ops/k8s/training-jobs`, `src/infrastructure/registry`
+*   **Owner sugerido:** MLOps Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 16 horas
+*   **Dependencias:** Ninguna
+*   **Entregables:** Docker image `astra-trainer:v1`, Helm charts para Jobs de entrenamiento.
+*   **Criterios de Éxito (DoD):** Un Job de K8s puede levantar, detectar la GPU y escribir un archivo dummy en el bucket de modelos.
+*   **Tests requeridos:** (Integration) Verificar acceso de lectura/escritura a S3 desde el Pod de GPU.
+*   **Riesgos:** Incompatibilidad de versiones CUDA con PyTorch.
+
+### [Fase2-T02] Motor de Comparación y Alineación (Diff Engine) [X]
+*   **Título:** Implementación de Alineación Semántica y Cálculo de Métricas
+*   **Descripción:** Crear el servicio que recibe `generated_id` y `final_id`. **Lógica Crucial:** Implementar el motor de **Recuperación de Metadatos (Metadata Discovery)**. Debe extraer los IDs de bloque (`chunk_id`) ocultos por el Builder en el XML del DOCX final. Esto permite asociar el texto corregido por el humano con el segmento de audio original, incluso si el link visual fue borrado, garantizando que los fallos de IA (`AUDIO_PENDING`) se conviertan en pares de entrenamiento de alta calidad (Ruta 3). **Alineación de Versiones (Auditoría v2.1):** Si la sesión fue una V2 (clonada), el motor de comparación debe recuperar y utilizar obligatoriamente el binario generado de la V2 (y no el de la V1) como base para el cálculo del delta, asegurando que el aprendizaje refleje la corrección incremental.
+*   **Dónde:** `src/core/comparator/alignment.py`, `src/core/comparator/metrics.py`
+*   **Owner sugerido:** Data Scientist / Algorithmic Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 24 horas
+*   **Dependencias:** ASTRA-INGEST (Parsing)
+*   **Entregables:** Endpoint `/compare` funcional que retorna JSON con delta.
+*   **Criterios de Éxito (DoD):** Capacidad de identificar correctamente que un párrafo fue movido de la página 1 a la 2 sin marcarlo como "borrado y creado".
+*   **Tests requeridos:** (Unit) Casos de prueba con inserción, borrado y modificación leve de texto.
+*   **Riesgos:** Alineación fallida en documentos con cambios estructurales masivos.
+
+### [Fase2-T03] Pipeline de Anonimización y Generación de Datasets [X]
+*   **Título:** Integración de Microsoft Presidio y Formateo JSONL
+*   **Descripción:** Implementar el `DatasetBuilder`. Tomar los pares alineados del T02. Pasar el texto por Presidio Analyzer + Anonymizer para reemplazar entidades (Nombres, Cédulas) con tokens genéricos. Formatear salida a JSONL (formato Instruct: Input/Output) y guardar en S3 encolado para entrenamiento.
+*   **Dónde:** `src/core/data/privacy.py`, `src/core/data/formatter.py`
+*   **Owner sugerido:** Backend Engineer (Security focused)
+*   **Prioridad:** P0
+*   **Estimación:** 20 horas
+*   **Dependencias:** [Fase2-T02]
+*   **Entregables:** Módulo de limpieza y persistencia de datos.
+*   **Criterios de Éxito (DoD):** Ningún nombre propio real (detectable por NER) persiste en el JSONL de entrenamiento.
+*   **Tests requeridos:** (Unit) Input con datos sensibles -> Output ofuscado pero gramaticalmente válido.
+*   **Riesgos:** Falsos negativos en detección de PII (nombres no comunes).
+
+### [Fase2-T04] Gestor de Diccionarios de Entidades (Hotfix Path) [X]
+*   **Título:** Extracción de Correcciones de Entidades (NER Feedback)
+*   **Descripción:** Implementar lógica rápida: Si el cambio detectado es solo un sustantivo propio (ej. "Jhon" -> "John"), no enviar a entrenamiento LoRA. En su lugar, actualizar el `entities_dictionary` en la base de datos del Tenant. Esto permite corrección inmediata en la siguiente sesión.
+*   **Dónde:** `src/core/comparator/entity_extractor.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase2-T02]
+*   **Entregables:** Servicio que actualiza JSON en Postgres.
+*   **Criterios de Éxito (DoD):** Corrección de nombre detectada y disponible en API de configuración en < 2 segundos. **Responsabilidad de Notificación (Auditoría R-05):** `LEARN` es el responsable explícito de publicar el evento `DICTIONARY_UPDATED` en el canal Pub/Sub de Redis inmediatamente después de actualizar la DB, disparando el Hot-Reload en `CORE`.
+*   **Tests requeridos:** (Integration) Flujo completo: Comparación -> Detección de Cambio de Entidad -> Actualización DB.
+*   **Riesgos:** Confusión entre corrección ortográfica y cambio de entidad real.
+
+### [Fase2-T05] Orquestador de Entrenamiento (Queue & Batching) [X]
+*   **Título:** Buffer de Acumulación y Trigger de Jobs
+*   **Descripción:** Implementar lógica de cola. No entrenar por cada documento. Acumular ejemplos en `pending_dataset`. Job programado (Cron) o Trigger por umbral (`count > 500`) que dispara el Job de Kubernetes (T01) inyectando el dataset acumulado.
+*   **Dónde:** `src/orchestration/job_scheduler.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase2-T01], [Fase2-T03]
+*   **Entregables:** Sistema de colas (Redis/Postgres) y Trigger logic.
+*   **Criterios de Éxito (DoD):** El sistema espera a tener N ejemplos antes de solicitar recursos de GPU.
+*   **Tests requeridos:** (Integration) Simular N eventos de feedback y verificar que solo al N-ésimo se lanza el Job.
+*   **Riesgos:** Race conditions si múltiples procesos intentan escribir/leer el dataset pendiente.
+
+### [Fase2-T06] Script de Entrenamiento LoRA (Trainer) [X]
+*   **Título:** Script Python para Fine-Tuning con PEFT
+*   **Descripción:** Escribir el script que se ejecuta dentro del contenedor `astra-trainer`. Carga modelo base (cuantizado), carga JSONL, configura LoRA config, ejecuta entrenamiento, guarda adaptador y genera métricas (Loss, Perplexity).
+*   **Dónde:** `src/ml/train_lora.py`
+*   **Owner sugerido:** ML Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 32 horas
+*   **Dependencias:** [Fase2-T01]
+*   **Entregables:** Script robusto de entrenamiento.
+*   **Criterios de Éxito (DoD):** Generación de archivo `.bin` (adapter) funcional que reduce el loss en el set de entrenamiento.
+*   **Tests requeridos:** (HIL - Hardware in Loop) Ejecución real en GPU validando consumo de VRAM y convergencia.
+*   **Riesgos:** OOM en GPU si el batch size es muy grande.
+
+- [ ] [Fase2-T07] **Validación Automática y Promoción (Ruta 6/14)** [X]
+*   **Título:** Pipeline de Evaluación y Señalización de Configuración
+*   **Descripción:** Antes de marcar el modelo como `READY`, ejecutar inferencia sobre el **"Golden Set"**. **Control de Calidad (Ruta 12/14):** Abortar si WER aumenta > 2%. Esta validación automática asegura que los nuevos adaptadores no introduzcan regresiones de calidad. **Propagación de Configuración (Ruta 6: Model Update):** Tras la promoción, el sistema debe actualizar el registro del Tenant y activar el flag **`NEW_MODEL_AVAILABLE:{tenant_id}`** en Redis.
+*   **Dónde:** `src/ml/evaluator.py`, `src/deployment/promoter.py`
+*   **Owner sugerido:** MLOps / Data Scientist
+*   **Prioridad:** P1
+*   **Estimación:** 20 horas
+*   **Dependencias:** [Fase2-T06]
+*   **Entregables:** Reporte de evaluación y sistema de señalización de modelos listos vía Redis.
+*   **Criterios de Éxito (DoD):** El flag en Redis se activa tras la promoción y el Orquestador lo detecta en el siguiente `session/start`.
+*   **Tests requeridos:** (Unit) Mockear métricas para forzar rechazo y aprobación.
+*   **Riesgos:** El set de validación es muy pequeño y no representa la realidad (overfitting al val set).
+
+### [Fase2-T08] API de Consulta de Estado
+*   **Título:** Endpoints para Dashboard de Aprendizaje
+*   **Descripción:** Exponer estado de los jobs, métricas de mejora y logs de entrenamiento para que el admin del tenant pueda ver "Cómo está aprendiendo su IA".
+*   **Dónde:** `src/api/routes/learning.py`
+*   **Owner sugerido:** Frontend/Fullstack dev
+*   **Prioridad:** P2
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase2-T05]
+*   **Entregables:** Endpoints JSON.
+*   **Criterios de Éxito (DoD):** API responde con historial de entrenamientos y status actual.
+*   **Riesgos:** Ninguno crítico.
+
+---
+
+## 5. Directivas de Calidad
+1.  **Reproducibilidad:** Cada Job de entrenamiento debe loguear el `commit_hash` del código, el `dataset_hash` y los hiperparámetros exactos en MLflow.
+2.  **Aislamiento Estricto:** Un adaptador LoRA pertenece a un `tenant_id`. El código de inferencia debe fallar (fail-closed) si intenta cargar un adaptador de otro tenant.
+3.  **Sanitización Defensiva:** El módulo de PII debe tener una lista de bloqueo (blocklist) manual además del modelo de IA, para forzar el enmascaramiento de nombres de VIPs conocidos del municipio.
+4.  **Resource Quotas:** Los Jobs de entrenamiento deben tener `limits` de CPU/RAM en K8s para no tumbar el cluster de inferencia (CORE).
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| Riesgo | Impacto | Probabilidad | Owner | Mitigación |
+| :--- | :---: | :---: | :--- | :--- |
+| **Fuga de PII en Modelo** | Crítico | Baja | Security Lead | Validación de Dataset pre-entrenamiento: regex scan buscando patrones de DNI/Email sobre el JSONL final. |
+| **Regresión de Modelo (Olvido Catastrófico)** | Alto | Media | Data Scientist | Incluir siempre un 20% de "Replay Data" (datos genéricos de alta calidad) en el mix de entrenamiento de cada tenant. |
+| **Cold Start / Latencia de Carga** | Medio | Alta | DevOps | Los adaptadores LoRA deben cachearse en el disco local de los pods de ASTRA-CORE, no descargarse de S3 en cada request. |
+| **Explosión de Costos GPU** | Medio | Media | FinOps | Implementar cola de prioridad y limitar a X entrenamientos por semana por tenant en el nivel estándar. |
+
+## 7. Checklist de Aceptación Global (DoD)
+*   [ ] **Feedback Loop Cerrado:** Un cambio en un DOCX dispara (eventualmente) la creación de un adaptador.
+*   [ ] **Integridad de Privacidad:** Auditoría de datasets generados confirma cero PII visible.
+*   [ ] **Hotfix Funcional:** Cambio de nombre en entidad se refleja en <1 min sin reentrenamiento.
+*   [ ] **Gobernanza:** MLflow registra linaje completo (Datos -> Modelo -> Métricas).
+*   [ ] **Performance:** El Job de entrenamiento no interfiere con la latencia de inferencia en producción (aislamiento de nodos).
+*   [ ] **Artefactos:** Documentación de arquitectura de MLOps y Guía de recuperación de desastres (si se corrompe un adaptador).
+
+## 8. Export CSV
+SI

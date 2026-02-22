@@ -1,0 +1,255 @@
+# Plan de Ejecución Técnica: Fase de Implementación Core ASTRA-INGEST
+
+## 1. Meta / Objetivo de la Fase
+Establecer el pipeline fundacional de ETL y Aprendizaje No Supervisado de ASTRA. El objetivo es transicionar desde la ingesta de archivos `.docx` crudos hasta la consolidación de una **Biblioteca de Conocimiento Estructurada** (Vectores + Relacional), garantizando la atomización fiel del XML (preservando estilos/estructura), la anonimización de PII y la capacidad de descubrir patrones (sub-plantillas) automáticamente mediante clustering, cumpliendo con los SLAs de rendimiento definidos.
+
+## 2. Suposiciones Iniciales
+1.  **Infraestructura Base:** El cluster de Kubernetes, instancias de Qdrant, PostgreSQL y MinIO/S3 ya están aprovisionados y son accesibles vía variables de entorno.
+2.  **Dataset de Calibración:** El equipo de Producto/Datos proveerá un "Golden Dataset" de al menos 50 documentos variados (limpios y sucios) antes del día 3 del sprint para pruebas de calibración de HDBSCAN.
+3.  **Modelos:** Se utilizarán los modelos pre-entrenados especificados (`paraphrase-multilingual-mpnet-base-v2` y `spacy-es-core-news-lg`) sin fine-tuning inicial en esta fase.
+4.  **Hardware:** Los entornos de desarrollo y staging cuentan con acceso a al menos una GPU (T4 o similar) o aceleración adecuada para procesar embeddings eficientemente.
+
+## 3. Análisis de Impacto
+*   **Servicios Afectados:**
+    *   **Database (Postgres):** Creación de esquemas relacionales complejos (Skeletons, Styles).
+    *   **Vector Search (Qdrant):** Definición de colecciones y payload indexing.
+    *   **Storage (S3):** Estructura de buckets para assets deduplicados.
+*   **Riesgos Directos:**
+    *   **Latencia de Procesamiento:** El paso de clustering (HDBSCAN) es intensivo en memoria; riesgo de OOM (Out of Memory) con lotes grandes.
+    *   **Fidelidad XML:** Riesgo de perder metadatos ocultos críticos al usar parsers genéricos si no se valida contra el esquema OOXML estricto.
+    *   **Seguridad:** Fuga de PII en los vectores si el paso de NER falla antes de la vectorización.
+
+---
+
+## 4. Roadmap Secuencial (Core)
+
+### [Fase1-T01] Andamiaje del Proyecto y Definición de Esquemas
+*   **Título:** Inicialización de Repositorio y Modelado de Datos (SQL/Qdrant)
+*   **Descripción:** Configurar el repositorio `astra-ingest` (Python/Rust hybrid setup). Definir modelos SQLAlchemy para PostgreSQL (Tablas: `ingest_jobs`, `skeletons`, `style_maps`, `assets`) y esquemas de colección en Qdrant. Configurar Dockerfile con dependencias de sistema para `lxml` y drivers de GPU.
+*   **Dónde:** `src/models`, `infrastructure/docker`, `migrations/`
+*   **Owner sugerido:** Tech Lead / Backend Senior
+*   **Prioridad:** P0
+*   **Estimación:** 8 horas
+*   **Dependencias:** Ninguna
+*   **Entregables:** Docker image base, scripts de migración SQL, script `init_qdrant.py`.
+*   **Criterios de Éxito (DoD):** `docker-compose up` levanta todos los servicios y las tablas/colecciones existen.
+*   **Tests requeridos:** (Integration) Verificar conexión y creación de esquemas en DBs limpias.
+*   **Riesgos:** Discrepancia de versiones en librerías de GPU (CUDA).
+
+### [Fase1-T02] Motor de Atomización XML (The Dissector)
+*   **Título:** Implementación del Parser OOXML de Alta Fidelidad
+*   **Descripción:** Crear el módulo core que abre el ZIP `.docx`, parsea `word/document.xml` usando `lxml` (o `quick-xml`), y extrae nodos preservando `w:pPr` y `w:rPr`. Debe separar estructura (Skeleton) de contenido. **Crucial:** No usar `python-docx` para la extracción final.
+*   **Dónde:** `src/core/parser/xml_engine.py`
+*   **Owner sugerido:** Backend Engineer (Especialista en Parsing)
+*   **Prioridad:** P0
+*   **Estimación:** 20 horas
+*   **Dependencias:** [Fase1-T01]
+*   **Entregables:** Módulo `DocxAtomizer` funcional.
+*   **Criterios de Éxito (DoD):** Capacidad de leer un DOCX complejo y reconstruir su XML válido sin perder atributos de estilo.
+*   **Tests requeridos:** (Unit) Comparar XML de entrada vs XML reconstruido (diff < 1%).
+*   **Riesgos:** Complejidad del estándar ECMA-376; manejo de namespaces XML.
+
+### [Fase1-T03] Extracción y Deduplicación de Assets (Media / AssetLibrary)
+*   **Título:** Pipeline de Imágenes con Hashing Perceptual (pHash / AssetLibrary)
+*   **Descripción:** Extraer binarios de `word/media/`. Implementar cálculo de pHash. Lógica de consulta a la **AssetLibrary** (módulo interno de gestión de medios de Ingest). Si `hamming_distance < umbral`, reutilizar ID; si no, registrar nuevo. **Crítico (Auditoría v2.1):** Formalizar la exposición de un servidor **gRPC** interno activo (que corra permanentemente, no como un Job temporal) que exponga `CheckAssetDuplicate`. Esto transforma a Ingest de un worker puro a un servicio híbrido/servidor para que el Orquestador pueda verificar duplicados en tiempo real (Ruta 7: Asset Loop). **Optimización (Nivel 3 - Ruta 4):** El servicio debe soportar una política de **Fail-Open**: si Ingest no responde en <50ms, el Orquestador procede con el asset como nuevo para no bloquear la sesión.
+*   **Dónde:** `src/core/media/processor.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase1-T02]
+*   **Entregables:** Función `process_media_folder()`.
+*   **Criterios de Éxito (DoD):** Dos imágenes visualmente idénticas pero con distintos nombres de archivo deben resolver al mismo Asset ID.
+*   **Tests requeridos:** (Unit) Test con imagen original vs imagen recomprimida (debe dar match).
+*   **Riesgos:** Falsos positivos en pHash con logotipos muy simples.
+
+### [Fase1-T04] (OPCIONAL, NO HECHO AUN)
+*   **Título:** Pipeline de NLP: Limpieza y Anonimización (NER)
+*   **Descripción:** Implementar limpieza de texto (regex para ruido) y ejecución de Spacy NER (`es_core_news_lg`). Reemplazar entidades detectadas (PER, LOC, DATE) por tokens `{ENTIDAD}` *antes* de la vectorización para evitar contaminación de clusters. **Nota:** Se marca como opcional para el MVP si el clustering por embeddings es suficiente.
+*   **Dónde:** `src/core/nlp/cleaner.py`
+*   **Owner sugerido:** ML Engineer
+*   **Prioridad:** P0
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase1-T01]
+*   **Entregables:** Clase `TextSanitizer`.
+*   **Criterios de Éxito (DoD):** Nombres propios en el Golden Dataset son reemplazados por placeholders en el 95% de los casos.
+*   **Tests requeridos:** (Unit) Input con datos sensibles -> Output sanitizado.
+*   **Riesgos:** Rendimiento del modelo Spacy en CPU; considerar cuantización si es lento.
+
+### [Fase1-T05] Motor de Embeddings y Vectorización
+*   **Título:** Generación de Embeddings por Párrafo
+*   **Descripción:** Integrar `sentence-transformers` (`paraphrase-multilingual-mpnet-base-v2`). Recibir lista de textos limpios (bloques) y devolver vectores densos. Implementar batching para optimizar uso de GPU/CPU.
+*   **Dónde:** `src/core/nlp/embedder.py`
+*   **Owner sugerido:** ML Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase1-T04]
+*   **Entregables:** Servicio interno de vectorización.
+*   **Criterios de Éxito (DoD):** Latencia < 50ms por párrafo promedio.
+*   **Tests requeridos:** (Unit) Verificar dimensiones del vector de salida (768).
+*   **Riesgos:** Bloqueo del GIL de Python durante inferencia; usar multiprocesamiento.
+
+### [Fase1-T06] Clustering y Descubrimiento de Patrones (HDBSCAN)
+*   **Título:** Implementación de Lógica de Clustering
+*   **Descripción:** Implementar algoritmo HDBSCAN sobre los vectores generados. Ajustar hiperparámetros (`min_cluster_size`, `min_samples`) para detectar grupos densos (plantillas) y descartar ruido (texto único).
+*   **Dónde:** `src/core/analytics/cluster_engine.py`
+*   **Owner sugerido:** Data Scientist / ML Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase1-T05]
+*   **Entregables:** Módulo que recibe vectores y retorna IDs de cluster y etiquetas (ruido vs core). **Crítico (Ruta 15):** Todas las operaciones de recuperación de clusters deben incluir un filtro estricto por `tenant_id` para evitar fugas de información entre clientes.
+*   **Criterios de Éxito (DoD):** Silhouette Score > 0.6 en dataset de prueba. Identificación correcta de "Llamado a lista" como cluster único.
+*   **Tests requeridos:** (Integration) Ejecución sobre batch de 50 docs conocidos.
+*   **Riesgos:** Consumo de RAM exponencial con datasets muy grandes (considerar sampling o incremental learning).
+
+### [Fase1-T07] Inducción de Plantillas y Generación de Skeleton
+*   **Título:** Constructor de Sub-plantillas XML y Skeletons
+*   **Descripción:** Para cada cluster denso, alinear los textos constituyentes, identificar partes variables (slots) y generar el XML "promedio" con tags `<w:sdt>`. Construir el objeto JSON `Skeleton` que referencia a estas sub-plantillas.
+*   **Dónde:** `src/core/builder/template_inducer.py`
+*   **Owner sugerido:** Senior Backend
+*   **Prioridad:** P0
+*   **Estimación:** 24 horas
+*   **Dependencias:** [Fase1-T02], [Fase1-T06]
+*   **Entregables:** Generador de XMLs canónicos y JSONs de estructura.
+*   **Criterios de Éxito (DoD):** El XML generado es válido contra XSD de OOXML.
+*   **Tests requeridos:** (Unit) Validar XML resultante. (E2E) Reconstruir un documento usando el Skeleton generado.
+*   **Riesgos:** XML malformado al fusionar árboles de nodos distintos.
+
+### [Fase1-T07.1]
+*   **Título:** Registro de Mapeo (Template-to-Zone Mapping)
+*   **Descripción:** Implementar la lógica para asignar un cluster/plantilla descubierta a una "Zona" del esqueleto (Header, Body, Footer). **Crítico:** Definir explícitamente la relación `template_id -> target_placeholder`. Falta una interfaz administrativa simple (o CLI) que permita al humano validar el descubrimiento y asignar el ruteo que usará el Orquestador. Sin esto, el Orquestador no sabrá dónde inyectar la información (Ruta 1).
+*   **Dónde:** `src/core/mapping/registry.py`
+*   **Owner sugerido:** Backend / Fullstack
+*   **Prioridad:** P1
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase1-T07]
+*   **Entregables:** Endpoint/CLI de asignación de zonas y persistencia en la config del Tenant.
+*   **Criterios de Éxito (DoD):** El Orquestador puede consultar qué zona (`target_placeholder`) le corresponde a un `template_id` descubierto.
+
+### [Fase1-T07.2]
+*   **Título:** UI/CLI de Etiquetado Humano (Human-in-the-loop)
+*   **Descripción:** Interfaz para que un administrador vea los clusters e imágenes descubiertas por INGEST y les asigne nombres humanamente legibles (ej: `CLUSTER_99` -> `APERTURA_ACTA`). Fundamental para que CORE pueda clasificar con labels útiles.
+*   **Dónde:** `/services/astra-admin-ui` o CLI tool. 
+*   **Prioridad:** P1
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase1-T07]
+*   **Entregables:** Herramienta de etiquetado de templates.
+
+### [ING-UI-01]
+*   **Título:** Interfaz de Mapeo Humano (Zone Mapping)
+*   **Descripción:** **COMPONENTE CRÍTICO NO OPCIONAL** para el "Cold Start" (Ruta 1). Una interfaz donde el administrador asigna el `template_id` descubierto a una "Zona" específica del Skeleton (Header, Body, Footer). Este mapa (`template_id` -> `target_placeholder`) es el "pegamento" que permite al Orquestador saber dónde inyectar el contenido detectado por CORE. Sin este mapeo manual, el sistema no puede funcionar en su primer arranque.
+*   **Dónde:** `/services/astra-admin-ui` (Mapping Module)
+*   **Prioridad:** P0 (Bloqueante Operativo)
+*   **Estimación:** 16 horas
+*   **Dependencias:** [Fase1-T07.1]
+*   **Entregables:** UI de ruteo semántico-físico.
+*   **Criterios de Éxito (DoD):** El administrador puede salvar un mapa de zonas que el Orquestador carga al iniciar sesiones.
+
+### [Fase1-T08] API de Ingesta y Orquestación de Jobs
+*   **Título:** Endpoints HTTP, Servidor gRPC y Worker de Cola
+*   **Descripción:** Implementar `POST /ingest/batch`, el servidor gRPC para la AssetLibrary (CheckDuplicate) y el worker asíncrono que orquesta los pasos anteriores T02-T07. Manejo de estados de Job, errores y retries.
+*   **Dónde:** `src/api/routes.py`, `src/workers/ingest_worker.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** Todas las anteriores.
+*   **Entregables:** API funcional expuesta.
+*   **Criterios de Éxito (DoD):** Procesamiento de un zip con 10 docs completa exitosamente y datos persisten en DB.
+*   **Tests requeridos:** (Integration) Flujo completo API -> Worker -> DB.
+*   **Riesgos:** Timeouts en conexiones HTTP largas (usar presigned URLs y async processing).
+
+### [Fase1-T09] Sistema de Normalización de Estilos
+*   **Título:** Mapeador de Estilos y Diccionario
+*   **Descripción:** Crear lógica para extraer estilos del `styles.xml`, compararlos con un diccionario canónico y generar el mapa de traducción. **Crítico:** El mapa resultante debe persistirse en la tabla de configuración del Tenant (SQL/Redis) para que el Orquestador pueda consumirlo y propagarlo al BUILDER durante las sesiones en vivo.
+*   **Dónde:** `src/core/parser/style_mapper.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P2
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase1-T02]
+*   **Entregables:** JSON de mapeo por Tenant y persistencia en configuración.
+*   **Criterios de Éxito (DoD):** Mapeo correcto de "Estilo Propio Negrita" -> "HEADING_1" y disponibilidad inmediata para el Orquestador.
+
+### [Fase1-T10] Validación y Benchmarking
+*   **Título:** Pruebas de Carga y Validación de Calidad
+*   **Descripción:** Ejecutar el pipeline con 1,000 documentos. Medir tiempos por etapa, uso de RAM/GPU y calidad de clusters resultantes.
+*   **Dónde:** `tests/benchmark/`
+*   **Owner sugerido:** QA Automation / DevOps
+*   **Prioridad:** P1
+*   **Estimación:** 8 horas
+*   **Dependencias:** T08
+*   **Entregables:** Reporte de rendimiento y ajustes de configuración.
+*   **Criterios de Éxito (DoD):** Cumplimiento de métrica: 1000 docs < 1 hora.
+
+### [Fase1-T11] Detección de Estructuras de Tablas Dinámicas
+*   **Título:** Analizador de Tablas y Fila Molde (Complexity Validation)
+*   **Descripción:** Implementar lógica para identificar tablas repetitivas. **Validación de Complejidad (Nivel 5 - Ruta 2):** El sistema debe detectar si una tabla tiene celdas fusionadas verticalmente (`vMerge`) o spans horizontales (`gridSpan`). Debido a la complejidad de clonar estas estructuras en OpenXML, dichas tablas deben marcarse como `NON_DYNAMIC`. Esto previene que el BUILDER intente clonar filas malformadas. Marcaje físico mediante `TBL_ID`.
+*   **Dónde:** `src/core/parser/table_analyzer.py`
+*   **Owner sugerido:** Backend Engineer
+*   **Prioridad:** P1
+*   **Estimación:** 12 horas
+*   **Dependencias:** [Fase1-T02], [Fase1-T06]
+*   **Entregables:** Mapa de tablas detectadas con metadatos de "Fila Repetitiva".
+*   **Criterios de Éxito (DoD):** Ingest identifica correctamente una tabla de votación y genera el XML de la fila molde limpio de datos. **Crítico:** La fila molde debe permanecer en el Skeleton físico marcada con un tag/id XML (ej: `TBL_ID`) para que el BUILDER pueda localizarla y clonarla.
+
+### [Fase1-T11.1]
+*   **Título:** Estandarización de Fila Molde (Master Row Cleaning)
+*   **Descripción:** Lógica refinada para el Skeleton (Ruta 2: Dynamic Table). Ingest debe limpiar las tablas dinámicas detectadas en el Skeleton, eliminando filas de ejemplo y dejando **exclusivamente** la fila de encabezados y **una sola fila de datos vacía** marcada con el marcador físico `TEMPLATE_ROW` y el atributo XML explícito `astra:rowType="template"`. Este atributo es el contrato formal que el Builder usará para identificar el molde de clonación.
+*   **Dónde:** `src/core/parser/table_standardizer.py`
+*   **Prioridad:** P1
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase1-T11]
+*   **Entregables:** Skeletons con tablas de ruteo limpias y listas para inyección.
+
+### [Fase1-T12] Sincronización de Mapeo de Configuración (The Link)
+*   **Título:** Propagación de Mapeo al Config-Service del Tenant
+*   **Descripción:** Implementar la lógica final del pipeline que, tras la validación humana (T07.2), empaqueta el "Mapa de Zonas" (`template_id` -> `target_placeholder`) y lo registra en el Servicio de Configuración del Tenant (Postgres/Redis). **Crítico:** Es el paso que permite que el ORCHESTRATOR conozca la ubicación física de cada cluster descubierto (Ruta 1).
+*   **Dónde:** `src/core/mapping/sync_worker.py`
+*   **Prioridad:** P0
+*   **Estimación:** 8 horas
+*   **Dependencias:** [Fase1-T07.2]
+*   **Entregables:** Módulo de sincronización de configuración validada.
+
+### [Fase1-T13]
+*   **Título:** Captura de Referencia Inmutable (S3 Versioning)
+*   **Descripción:** Durante la ingesta y catalogación del Skeleton, el sistema debe recuperar y persistir el `version_id` del objeto en S3. Esto es crítico para el Orquestador, quien debe "pinear" la sesión a una versión física exacta para evitar inconsistencias si el archivo base es sobreescrito en el bucket (Ruta 1).
+*   **Dónde:** `src/core/parser/skeleton_engine.py`
+*   **Prioridad:** P1
+*   **Estimación:** 4 horas
+*   **Dependencias:** [Fase1-T02]
+*   **Entregables:** Metadata del Skeleton incluye `s3_version_id`.
+
+### [Fase1-T14] [NEW] Definición del Tenant Config Service
+*   **Título:** Implementación del Pivote Central de Configuración (Tenant Config)
+*   **Descripción:** Definir y desplegar el **Tenant Config Service** (Microservicio Shared o Librería de acceso a Postgres/Redis). Este es el pivote central que almacena el `style_map`, `skeleton_id` activo, el **Zone-Mapping** (`template_id` -> `target_placeholder`) y el **Table-Mapping** (`intent_id` -> `target_table_id`). Los módulos INGEST (escritura) y ORCHESTRATOR (lectura al inicio de sesión) dependen críticamente de este servicio (Ruta 1 y Ruta 2).
+*   **Prioridad:** P0
+*   **Estimación:** 16 horas
+*   **Entregables:** API de gestión de configuración de inquilinos y persistencia persistente.
+
+*(Nota: Tareas de UI para visualización de clusters o corrección manual quedan para la Fase 2 / Backlog)*
+
+---
+
+## 5. Directivas de Calidad
+1.  **Strict Typing:** Todo el código Python debe usar Type Hints y pasar validación `mypy`. Rust debe compilar sin warnings.
+2.  **XML Safety:** Prohibido el uso de regex para parsear XML. Uso obligatorio de parsers DOM/SAX seguros. Deshabilitar resolución de entidades externas (XXE mitigation).
+3.  **Observabilidad:** Cada paso del pipeline (Parse, Hash, Embed, Cluster) debe emitir logs estructurados (JSON) con `job_id` y `tenant_id` para trazabilidad en Kibana/CloudWatch.
+4.  **Manejo de Fallos:** Si un documento en un lote falla, el lote **no** debe detenerse. El documento se marca como `FAILED` en la DB con el stacktrace y el worker continúa.
+
+## 6. Matriz de Riesgos y Mitigaciones
+
+| Riesgo | Impacto | Probabilidad | Owner | Mitigación |
+| :--- | :---: | :---: | :--- | :--- |
+| **Colapso de Memoria (OOM) en Clustering** | Alto | Media | Data Scientist | Implementar HDBSCAN en modo *incremental* o limitar el tamaño del lote de vectores en memoria (chunking). |
+| **Fuga de PII en Vectores** | Crítico | Baja | Security Lead | Test unitario bloqueante en CI/CD que verifica que el output del Cleaner no contenga patrones de DNI/Email conocidos. |
+| **Corrupción de XML en Sub-plantillas** | Alto | Media | Backend Lead | Validación estricta contra XSD de OOXML antes de guardar en la base de datos. |
+| **Cuello de Botella en GPU** | Medio | Alta | DevOps | Implementar batching dinámico en el servicio de embeddings para saturar la GPU eficientemente sin encolar requests excesivos. |
+
+## 7. Checklist de Aceptación Global (DoD)
+*   [ ] **Pipeline Funcional:** API acepta batch -> Worker procesa -> Datos en Postgres/Qdrant.
+*   [ ] **Seguridad:** Escaneo de vulnerabilidades (Snyk/Trivy) en imagen Docker limpio. No resolución de entidades XML externas.
+*   [ ] **Privacidad:** Verificación manual de 20 sub-plantillas aleatorias confirmando que no hay nombres reales.
+*   [ ] **Performance:** Procesamiento de lote de referencia (100 docs) en tiempo < 6 minutos.
+*   [ ] **Integridad:** El sistema puede regenerar un documento válido (abrible en Word) a partir de un Skeleton + Sub-plantillas extraídas.
+*   [ ] **Artefactos:** Documentación de API (OpenAPI/Swagger) y Diagrama de Entidad-Relación actualizado.
+
+## 8. Export CSV
+SI

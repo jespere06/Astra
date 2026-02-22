@@ -1,0 +1,46 @@
+# Roadmap Maestro Integrado: ASTRA v2.1 (SYSTEMIC INTEGRITY)
+
+Este documento representa la versión final de la arquitectura de ASTRA, endurecida tras una auditoría senior de integración sistémica. Resuelve los puntos ciegos entre los módulos y formaliza los servicios compartidos.
+
+## 🏆 Estatus de Certificación: HARDENED & SYSTEMICALLY SECURE
+
+Se han resuelto las brechas de "Componentes Fantasma" y "Ambigüedades de Handover".
+
+---
+
+## 🏗️ Refuerzos de Integración (Auditoría v2.1)
+
+### 1. El Pivote Central: "Tenant Config Service"
+- Se formaliza como la fuente de verdad única para **Zone Mapping** y **Style Maps**.
+- **Flujo:** INGEST (Escritura post-audit) -> CONFIG_SVC -> ORCHESTRATOR (Lectura pre-sesión).
+
+### 2. Protocolo de Activos (Asset Loop)
+- Comunicación **gRPC** obligatoria entre Orquestador e Ingest.
+- Política de **Fail-Open**: Timeouts de 50ms para no bloquear la subida del usuario.
+
+### 3. Cadena de Custodia (Audio Handover)
+- El Orquestador es el responsable de ejecutar el **S3 CopyObject** hacia el bucket WORM de **GUARD** antes de la limpieza de temporales.
+
+### 4. Bucle de Aprendizaje (Responsabilidades)
+- **LEARN** es el responsable explícito de publicar el evento `MODEL_UPDATED` en Redis para el Hot-Reload de **CORE**.
+- Las sesiones **V2 (Clones)** se comparan contra su propio binario generado para evitar ruido entre versiones.
+
+---
+
+## 📅 Roadmap de Ejecución (Sincronizado)
+
+### FASE 1: Infraestructura y Shared (P0)
+- [ ] [SHARED] Despliegue de **Tenant Config Service** (Postgres/Redis).
+- [ ] [INGEST] Motor de Atomización (Alta Fidelidad) y Asset Deduplication (gRPC).
+
+### FASE 2: Inteligencia y Evolución (P0)
+- [ ] [CORE] Motor de Intención con Structured Data Support.
+- [ ] [LEARN] Comparator Engine con lógica de V2 y Pub/Sub Feedback.
+
+### FASE 3: Orchestration & Construction (P0)
+- [ ] [ORCH] Handover de Referencia (S3) y CopyObject a Guard.
+- [ ] [BUILDER] Inyección Sanitizada y Embebido Físico de Medios.
+
+---
+
+**Conclusión:** ASTRA v2.1 es un sistema de grado industrial con contratos claros y manejo de fallos determinista.

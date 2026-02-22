@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animación ASTRA</title>
+    <!-- Importamos una fuente moderna de Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: #0f172a; /* Fondo oscuro */
+            color: #94a3b8; /* Texto gris claro */
+            font-family: 'Montserrat', sans-serif;
+            overflow: hidden;
+        }
+
+        /* Contenedor principal del texto */
+        .astra-container {
+            font-size: clamp(1rem, 2.5vw, 2.5rem); /* Se adapta al tamaño de la pantalla */
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            /* La animación hace que todo el bloque crezca al final */
+            animation: scaleUpContainer 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+            animation-delay: 3s; /* Espera 3 segundos antes de actuar */
+        }
+
+        /* Letras principales (A, S, T, R, A) */
+        .letter {
+            font-weight: 700;
+            color: #f8fafc; /* Blanco brillante */
+            animation: glowLetter 1.5s forwards;
+            animation-delay: 3s;
+        }
+
+        /* Texto que va a desaparecer */
+        .collapse {
+            display: inline-flex;
+            overflow: hidden;
+            max-width: 500px; /* Ancho suficiente para las palabras */
+            opacity: 1;
+            /* Animación para encogerse y desaparecer */
+            animation: shrinkText 1.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+            animation-delay: 3s;
+        }
+
+        /* --- KEYFRAMES (Animaciones) --- */
+
+        /* Encoge las palabras de relleno hasta ancho 0 */
+        @keyframes shrinkText {
+            0% {
+                max-width: 500px;
+                opacity: 1;
+            }
+            40% {
+                opacity: 0; /* Se desvanece antes de encogerse del todo */
+            }
+            100% {
+                max-width: 0;
+                opacity: 0;
+                padding: 0;
+                margin: 0;
+            }
+        }
+
+        /* Ilumina las letras principales (ASTRA) */
+        @keyframes glowLetter {
+            100% {
+                color: #00e5ff; /* Color cian tecnológico */
+                text-shadow: 0 0 15px rgba(0, 229, 255, 0.6);
+            }
+        }
+
+        /* Aumenta el tamaño del contenedor una vez que es solo "ASTRA" */
+        @keyframes scaleUpContainer {
+            100% {
+                transform: scale(2.5);
+                letter-spacing: 2px;
+            }
+        }
+
+        /* Botón de repetir (estilos secundarios) */
+        .replay-btn {
+            margin-top: 80px;
+            padding: 10px 20px;
+            background-color: transparent;
+            color: #64748b;
+            border: 1px solid #64748b;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.3s ease;
+            opacity: 0;
+            animation: fadeIn 1s forwards;
+            animation-delay: 4.5s; /* Aparece después de que termina toda la animación */
+        }
+
+        .replay-btn:hover {
+            background-color: #00e5ff;
+            color: #0f172a;
+            border-color: #00e5ff;
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Contenedor que reiniciaremos con JS -->
+    <div id="anim-wrapper">
+        <div class="astra-container">
+            <!-- A -->
+            <span class="letter">A</span><span class="collapse">sistente&nbsp;de&nbsp;</span>
+            <!-- S -->
+            <span class="letter">S</span><span class="collapse">eguimiento,&nbsp;</span>
+            <!-- T -->
+            <span class="letter">T</span><span class="collapse">ranscripción&nbsp;y&nbsp;</span>
+            <!-- R -->
+            <span class="letter">R</span><span class="collapse">egistro&nbsp;de&nbsp;</span>
+            <!-- A -->
+            <span class="letter">A</span><span class="collapse">ctas</span>
+        </div>
+    </div>
+
+    <!-- Botón para ver la animación de nuevo -->
+    <button class="replay-btn" onclick="replayAnimation()">Repetir Animación</button>
+
+    <script>
+        // Función simple para reiniciar la animación
+        function replayAnimation() {
+            const wrapper = document.getElementById('anim-wrapper');
+            const content = wrapper.innerHTML;
+            wrapper.innerHTML = ''; // Limpiamos
+            
+            // Forzamos un pequeño reflow del navegador para que entienda el reinicio
+            void wrapper.offsetWidth; 
+            
+            wrapper.innerHTML = content; // Volvemos a inyectar el HTML
+        }
+    </script>
+
+</body>
+</html>
