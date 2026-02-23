@@ -1,5 +1,5 @@
 # 1. Base Image: Obligatorio usar Unsloth para tener CUDA listo
-FROM unslothai/unsloth:latest
+FROM unsloth/unsloth:latest
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
