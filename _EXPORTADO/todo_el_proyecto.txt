@@ -1,4 +1,157 @@
 ================================================================================
+RUTA: /Users/jesusandresmezacontreras/projects/astra/dispatch_training.py
+================================================================================
+import os
+import json
+import time
+import asyncio
+import boto3
+from botocore.client import Config
+from datetime import datetime
+from dotenv import load_dotenv
+
+# 1. Cargar el entorno
+load_dotenv(".env.hybrid")
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "services/astra-learn")))
+from src.infrastructure.clients.runpod_client import RunPodClient
+
+# ================= CONFIGURACIÓN DE RED (THE HACKER WAY) =================
+TENANT_ID = "concejo_manizales"
+TRAIN_PATH = "dataset_final/train.jsonl"
+VAL_PATH = "dataset_final/val.jsonl"
+S3_BUCKET = "astra-models"
+
+# ⚠️ PEGA AQUÍ TU URL DE NGROK (sin el slash final)
+NGROK_URL = "https://2da9-186-82-100-9.ngrok-free.app"
+
+# MinIO default creds (las que tienes en local)
+AWS_AK = "admin"
+AWS_SK = "astra_minio_pass"
+# =========================================================================
+
+async def run_dispatch():
+    print(f"\n🚀 Iniciando Despacho (Ngrok Mode) para {TENANT_ID}...")
+    print(f"🌍 Endpoint Público: {NGROK_URL}")
+
+    # 1. Configurar Cliente S3 apuntando a NGROK
+    # IMPORTANTE: s3={'addressing_style': 'path'} es vital para que MinIO entienda las peticiones de ngrok
+    s3 = boto3.client(
+        's3',
+        endpoint_url=NGROK_URL,
+        aws_access_key_id=AWS_AK,
+        aws_secret_access_key=AWS_SK,
+        config=Config(signature_version='s3v4', s3={'addressing_style': 'path'}),
+        region_name="us-east-1"
+    )
+
+    # Asegurar que el bucket exista
+    try:
+        s3.head_bucket(Bucket=S3_BUCKET)
+    except:
+        print(f"🪣 Creando bucket {S3_BUCKET}...")
+        s3.create_bucket(Bucket=S3_BUCKET)
+
+    # 2. Subir Datasets y Generar URLs
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    train_key = f"training/datasets/{TENANT_ID}/{timestamp}/train.jsonl"
+    val_key = f"training/datasets/{TENANT_ID}/{timestamp}/val.jsonl"
+    output_key = f"training/adapters/{TENANT_ID}/{timestamp}/adapter.zip"
+
+    print("📦 Subiendo datasets a MinIO (via Ngrok)...")
+    with open(TRAIN_PATH, 'rb') as f: s3.upload_fileobj(f, S3_BUCKET, train_key)
+    with open(VAL_PATH, 'rb') as f: s3.upload_fileobj(f, S3_BUCKET, val_key)
+
+    print("🔗 Generando URLs criptográficas temporales para el Worker (Válidas por 24h)...")
+    train_url = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET, 'Key': train_key}, ExpiresIn=86400)
+    val_url = s3.generate_presigned_url('get_object', Params={'Bucket': S3_BUCKET, 'Key': val_key}, ExpiresIn=86400)
+    upload_url = s3.generate_presigned_url('put_object', Params={'Bucket': S3_BUCKET, 'Key': output_key}, ExpiresIn=86400)
+
+    # 3. Armar Payload para RunPod
+    payload = {
+        "dataset_url": train_url,
+        "validation_url": val_url,
+        "upload_url": upload_url,
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": 2e-4,
+            "max_seq_length": 2048,
+            "batch_size": 2 # Ideal para RTX 4090
+        }
+    }
+
+    # 4. Despachar a RunPod
+    # Asume que RUNPOD_API_KEY y RUNPOD_ENDPOINT_ID están en tu .env.hybrid
+    client = RunPodClient()
+    
+    try:
+        print("🔥 Despertando GPU en RunPod y enviando la orden...")
+        job_id = await client.submit_job(payload)
+        print(f"🎫 JOB ACEPTADO: ID {job_id}")
+        
+        report_data = {
+            "job_id": job_id,
+            "tenant_id": TENANT_ID,
+            "timestamp_started": timestamp,
+            "output_s3_key": output_key,
+            "payload": payload,
+            "status": "IN_QUEUE"
+        }
+        
+        report_file = f"reports_jobs/job_{job_id}.json"
+        os.makedirs("reports_jobs", exist_ok=True)
+        with open(report_file, 'w') as f:
+            json.dump(report_data, f, indent=4)
+        
+        print("\n⏳ Iniciando Radar de Monitoreo (Polling cada 20 segundos)...")
+        print("   Nota: Un entrenamiento de 1600 pares puede tardar entre 15 y 30 minutos.")
+        
+        # 5. Polling del Estado
+        while True:
+            status_res = await client.get_status(job_id)
+            status = status_res.get("status", "UNKNOWN")
+            
+            current_time = datetime.now().strftime('%H:%M:%S')
+            print(f"   [{current_time}] Estado del Worker: {status}")
+            
+            if status == "COMPLETED":
+                print("\n" + "="*50)
+                print("🎉 ¡ENTRENAMIENTO COMPLETADO EXITOSAMENTE!")
+                print("="*50)
+                print(f"📥 El nuevo adaptador Lora bajó mágicamente a tu MinIO local en: {output_key}")
+                
+                report_data["status"] = "COMPLETED"
+                report_data["timestamp_finished"] = datetime.now().isoformat()
+                report_data["runpod_response"] = status_res
+                with open(report_file, 'w') as f:
+                    json.dump(report_data, f, indent=4)
+                break
+                
+            elif status in ["FAILED", "CANCELLED"]:
+                print("\n❌ EL ENTRENAMIENTO FALLÓ O FUE CANCELADO.")
+                print(f"Detalles desde la nube: {status_res.get('error', status_res)}")
+                
+                report_data["status"] = status
+                report_data["timestamp_finished"] = datetime.now().isoformat()
+                report_data["error"] = status_res
+                with open(report_file, 'w') as f:
+                    json.dump(report_data, f, indent=4)
+                break
+            
+            time.sleep(20)
+            
+    except Exception as e:
+        print(f"\n❌ Error crítico en la orquestación: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    asyncio.run(run_dispatch())
+
+
+================================================================================
 RUTA: /Users/jesusandresmezacontreras/projects/astra/client_simulation.py
 ================================================================================
 # client_simulation.py
@@ -7289,6 +7442,80 @@ Fecha: 2026-02-20T19:58:15.412868
 ================================================================================
    [0.0s -> ~5938.6s] (364 segs): Dirección territorial de salud de Canda. Sean todos bienvenidos a una audiencia pública más de este honorable cuerpo colegiado, al doctor David Gómez, secretario de educación, su grupo de colaboradore...
 
+
+
+================================================================================
+RUTA: /Users/jesusandresmezacontreras/projects/astra/reports_jobs/job_75721e92-1bc2-4d63-b9f4-887068683ba7-u2.json
+================================================================================
+{
+    "job_id": "75721e92-1bc2-4d63-b9f4-887068683ba7-u2",
+    "tenant_id": "concejo_manizales",
+    "timestamp_started": "20260222_174633",
+    "output_s3_key": "training/adapters/concejo_manizales/20260222_174633/adapter.zip",
+    "payload": {
+        "dataset_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260222_174633/train.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=7c12ef04d0662c4d8354ca6b8b460bf31cd134b9012469c370efb93639ef6233",
+        "validation_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260222_174633/val.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=7379d224ced4ddecb042b83d5de770612616c601732624d37b859f24a178b0ee",
+        "upload_url": "https://5b84-186-82-100-9.ngrok-free.app/astra-models/training/adapters/concejo_manizales/20260222_174633/adapter.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260222%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260222T224638Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=e895251a12212d71eadf684daa7ab9fbaabe4c92fc10f798c33f21b559a9d3e9",
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": 0.0002,
+            "max_seq_length": 2048,
+            "batch_size": 2
+        }
+    },
+    "status": "CANCELLED",
+    "timestamp_finished": "2026-02-22T17:48:21.093122",
+    "error": {
+        "id": "75721e92-1bc2-4d63-b9f4-887068683ba7-u2",
+        "status": "CANCELLED"
+    }
+}
+
+
+================================================================================
+RUTA: /Users/jesusandresmezacontreras/projects/astra/reports_jobs/job_2f997aa2-342a-4f07-8b69-93902a0b7c1b-u1.json
+================================================================================
+{
+    "job_id": "2f997aa2-342a-4f07-8b69-93902a0b7c1b-u1",
+    "tenant_id": "concejo_manizales",
+    "timestamp_started": "20260223_102920",
+    "output_s3_key": "training/adapters/concejo_manizales/20260223_102920/adapter.zip",
+    "payload": {
+        "dataset_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260223_102920/train.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T152925Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=61c1184fe8560d719bb187f5cd3a92629effed6fe34acffc857fc4c96bd7e384",
+        "validation_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260223_102920/val.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T152925Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=a34c806c0523e4c9f479e461872da1ca665df264299f8e287298b68834ae2981",
+        "upload_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/adapters/concejo_manizales/20260223_102920/adapter.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T152925Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=f9ae7eba1ab3065ca3271adffa6d163dbca754b00a4361d3d9c7ad08e144c42e",
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": 0.0002,
+            "max_seq_length": 2048,
+            "batch_size": 2
+        }
+    },
+    "status": "IN_QUEUE"
+}
+
+
+================================================================================
+RUTA: /Users/jesusandresmezacontreras/projects/astra/reports_jobs/job_7dc159ef-5ff3-417e-9c59-c16b1f1df466-u1.json
+================================================================================
+{
+    "job_id": "7dc159ef-5ff3-417e-9c59-c16b1f1df466-u1",
+    "tenant_id": "concejo_manizales",
+    "timestamp_started": "20260223_095602",
+    "output_s3_key": "training/adapters/concejo_manizales/20260223_095602/adapter.zip",
+    "payload": {
+        "dataset_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260223_095602/train.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T145607Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=f72f27447a944a10bf3576cc8f36118e375e22f210b6710f703300ad79ec3340",
+        "validation_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/datasets/concejo_manizales/20260223_095602/val.jsonl?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T145607Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aff12c5e1928bc7e1431419c8bc6f491b0c69c6ff76eb9c4c990fc68bd63ed08",
+        "upload_url": "https://2da9-186-82-100-9.ngrok-free.app/astra-models/training/adapters/concejo_manizales/20260223_095602/adapter.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=admin%2F20260223%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260223T145607Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=3aa7249678fae273c5b00935526c1e5664870f0107fbeda840d79ea535a68a3f",
+        "hyperparameters": {
+            "epochs": 3,
+            "learning_rate": 0.0002,
+            "max_seq_length": 2048,
+            "batch_size": 2
+        }
+    },
+    "status": "IN_QUEUE"
+}
 
 
 ================================================================================
@@ -16949,19 +17176,19 @@ if __name__ == "__main__":
 ================================================================================
 RUTA: /Users/jesusandresmezacontreras/projects/astra/.github/workflows/deploy-worker.yml
 ================================================================================
-name: Build & Push Astra Worker
+name: Build and Push ASTRA Trainer
 
 on:
   push:
     branches: ["main"]
     paths:
-      - "services/astra-worker/**"
-      - "libs/shared-kernel/**"
-      - ".github/workflows/deploy-worker.yml"
-  workflow_dispatch: # Permite ejecución manual desde GitHub UI
+      - "services/astra-learn/**"
+      - ".github/workflows/deploy-trainer.yml"
+  workflow_dispatch: # Botón manual en GitHub
 
 env:
-  IMAGE_NAME: jesusmezac/astra-worker # ⚠️ CAMBIADO AL USUARIO DEL PROYECTO
+  # ⚠️ PON AQUÍ TU USUARIO REAL DE DOCKER HUB (ej. jemeza06)
+  IMAGE_NAME: jemeza06/astra-trainer:v1
 
 jobs:
   build-and-push:
@@ -16970,6 +17197,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Liberamos espacio en el servidor de GitHub (es necesario para imágenes CUDA)
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -16980,25 +17215,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./services/astra-worker/Dockerfile
+          file: ./services/astra-learn/Dockerfile.runpod
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+          tags: ${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}-cache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}-cache,mode=max
 
 
 

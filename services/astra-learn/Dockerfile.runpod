@@ -1,25 +1,34 @@
-# Usamos la base oficial de RunPod con PyTorch y CUDA 12.1 preinstalado
-FROM runpod/pytorch:2.2.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+# 1. Base Image: Obligatorio usar Unsloth para tener CUDA listo
+FROM unslothai/unsloth:latest
 
-# Variables de entorno para que Python no guarde en buffer los logs (vital para ver errores)
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Instalar Git
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
-# Instalar Unsloth y todas las dependencias de IA dejando que PIP resuelva la compatibilidad
-RUN pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
-RUN pip install trl peft accelerate bitsandbytes xformers transformers datasets
-
-# Instalar utilidades de ASTRA
-RUN pip install runpod boto3 requests python-dotenv
 
 WORKDIR /app
 
-# Copiar el código fuente
-COPY services/astra-learn/src/ /app/src/
-COPY services/astra-learn/runpod_training_handler.py /app/
+# 2. SOLUCIÓN DEL ERROR DE CRASH (Torchvision mismatch)
+# Actualizamos torchvision y reinstalamos unsloth para asegurar compatibilidad
+RUN pip install --no-cache-dir --upgrade "torchvision>=0.25.0" "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 
-# El comando de inicio
-CMD ["python", "-u", "runpod_training_handler.py"]
+# 3. Instalar solo lo que necesita el Worker para hablar con S3 y RunPod
+# No necesitamos FastAPI aquí, solo scripts de ejecución.
+RUN pip install --no-cache-dir \
+    runpod \
+    requests \
+    boto3 \
+    datasets \
+    trl \
+    huggingface_hub
+
+# 4. Limpieza para reducir peso (Importante para tu descarga lenta)
+RUN apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /root/.cache/pip
+
+# 5. Copiar solo lo necesario para entrenar (Evita copiar basura)
+# Copiamos la carpeta src completa porque train.py la necesita
+COPY services/astra-learn/src/ ./src/
+# Copiamos el handler de RunPod
+COPY services/astra-learn/runpod_training_handler.py .
+
+# 6. Comando de arranque
+CMD ["python", "runpod_training_handler.py"]

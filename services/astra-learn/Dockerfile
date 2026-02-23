@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# SOLO instalamos curl para healthcheck y librerías runtime básicas
+# Instalar dependencias de sistema mínimas
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -14,12 +14,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libxslt1.1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Instalar requerimientos del servicio (FastAPI, SQLAlchemy, etc.)
+COPY services/astra-learn/requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip wheel setuptools && \
     pip install --prefer-binary -r requirements.txt
 
-COPY src/ src/
+# Copiar código fuente
+COPY services/astra-learn/src/ src/
 
 # Usuario seguro
 RUN groupadd -g 1000 astra && \

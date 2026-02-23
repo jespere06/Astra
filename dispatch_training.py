@@ -21,7 +21,7 @@ VAL_PATH = "dataset_final/val.jsonl"
 S3_BUCKET = "astra-models"
 
 # ⚠️ PEGA AQUÍ TU URL DE NGROK (sin el slash final)
-NGROK_URL = "https://5b84-186-82-100-9.ngrok-free.app"
+NGROK_URL = "https://2da9-186-82-100-9.ngrok-free.app"
 
 # MinIO default creds (las que tienes en local)
 AWS_AK = "admin"
