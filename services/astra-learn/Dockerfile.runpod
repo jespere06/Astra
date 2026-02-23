@@ -1,5 +1,9 @@
-# 1. Base Image: Obligatorio usar Unsloth para tener CUDA listo
+# 1. Base Image
 FROM unsloth/unsloth:latest
+
+# ⚠️ FIX CRÍTICO: La imagen de Unsloth usa un usuario sin privilegios por defecto.
+# Forzamos 'root' para poder instalar dependencias y limpiar caché.
+USER root
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -8,10 +12,11 @@ WORKDIR /app
 
 # 2. SOLUCIÓN DEL ERROR DE CRASH (Torchvision mismatch)
 # Actualizamos torchvision y reinstalamos unsloth para asegurar compatibilidad
-RUN pip install --no-cache-dir --upgrade "torchvision>=0.25.0" "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+# También actualizamos pip para evitar advertencias
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --upgrade "torchvision>=0.25.0" "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 
-# 3. Instalar solo lo que necesita el Worker para hablar con S3 y RunPod
-# No necesitamos FastAPI aquí, solo scripts de ejecución.
+# 3. Instalar solo lo que necesita el Worker
 RUN pip install --no-cache-dir \
     runpod \
     requests \
@@ -20,14 +25,12 @@ RUN pip install --no-cache-dir \
     trl \
     huggingface_hub
 
-# 4. Limpieza para reducir peso (Importante para tu descarga lenta)
+# 4. Limpieza para reducir peso (Ahora sí funcionará porque somos root)
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /root/.cache/pip
 
-# 5. Copiar solo lo necesario para entrenar (Evita copiar basura)
-# Copiamos la carpeta src completa porque train.py la necesita
+# 5. Copiar solo lo necesario
 COPY services/astra-learn/src/ ./src/
-# Copiamos el handler de RunPod
 COPY services/astra-learn/runpod_training_handler.py .
 
 # 6. Comando de arranque
